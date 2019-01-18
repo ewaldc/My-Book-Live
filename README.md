@@ -24,15 +24,14 @@ How to avoid opening the My Book Live shell in case a boot failure:
 One of the requirements to make this all work is the ability to read/write the u-boot environment stored in nor flash from the OS, which is stored within /dev/mtd0.
 
 First install u-boot-tools:
-
-'apt-get install u-boot-tools'
+`apt-get install u-boot-tools`
 
 Then create /etc/fw_env.config:
 
-'cat >/etc/fw_env.config <<EOF
+`cat >/etc/fw_env.config <<EOF
 /dev/mtd0 0x1e000 0x1000 0x1000 1
 /dev/mtd0 0x1f000 0x1000 0x1000 1
-EOF'
+EOF`
 
 Now you can check your environment: 
 `fw_printenv`
