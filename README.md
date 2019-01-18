@@ -11,8 +11,7 @@ Kernel patches and Debian release for Western Digital My Book Live
 * kernel 4.9.99 pre-compiled, updated DTB
 * SAMBA patched for performance
 
-Installation instructions [here](https://drive.google.com/open?id=1xaSLBwQVS4h4scVBxDGTdkvvZ8WYBfLE)
- 
+Installation instructions [here](https://drive.google.com/open?id=1xaSLBwQVS4h4scVBxDGTdkvvZ8WYBfLE)<br /> 
 Compressed tar archive [here](https://drive.google.com/open?id=1JIxsm7rw0dInq5XE2C5nBjtVbGqGfVes)
 
 
@@ -28,12 +27,9 @@ First install u-boot-tools:
 
 Then create /etc/fw_env.config:
 
-`cat >/etc/fw_env.config <<EOF`
-
-`/dev/mtd0 0x1e000 0x1000 0x1000 1` 
-
-`/dev/mtd0 0x1f000 0x1000 0x1000 1` 
-
+`cat >/etc/fw_env.config <<EOF`<br />
+`/dev/mtd0 0x1e000 0x1000 0x1000 1`<br /> 
+`/dev/mtd0 0x1f000 0x1000 0x1000 1`<br /> 
 `EOF`
 
 Now you can check your environment: 
