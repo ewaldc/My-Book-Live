@@ -1,6 +1,6 @@
 # My-Book-Live
 Kernel patches and Debian release for Western Digital My Book Live
-Markup :  ## Debian Jessie 8.11 optimized for MyBookLive: ##
+## Debian Jessie 8.11 optimized for MyBookLive: ##
 
 
 Debian 8.11 with security patches backported to PowerPC
