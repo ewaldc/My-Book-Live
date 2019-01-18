@@ -1,0 +1,656 @@
+diff -urN linux-4.0.1/drivers/input/misc/a3g_button.c linux-4.0.1-wd1/drivers/input/misc/a3g_button.c
+
+--- linux-4.0.1/drivers/input/misc/a3g_button.c	1970-01-01 03:00:00.000000000 +0300
++++ linux-4.0.1-wd1/drivers/input/misc/a3g_button.c	2015-03-29 21:02:00.000000000 +0300
+@@ -0,0 +1,643 @@
++/*
++ * Button driver to support Apollo 3G board
++ */
++
++#include <linux/kernel.h>
++#include <linux/platform_device.h>
++#include <linux/completion.h>
++#include <linux/leds.h>
++#include <linux/delay.h> 
++#include <asm/io.h>
++#include <linux/of.h>
++#include <linux/of_platform.h>
++#include <linux/ioport.h>
++#include <linux/spinlock.h>
++#include <linux/types.h>
++
++#include <linux/suspend.h>
++#include <linux/kthread.h>
++#include <linux/sched.h>
++#include <linux/wait.h>
++#include <linux/signal.h>
++#include <linux/freezer.h>
++#include <linux/ioport.h>
++
++#include <linux/netlink.h>
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/input.h>
++#include <linux/major.h>
++#include <linux/device.h>
++#include <linux/slab.h>
++#include <linux/poll.h>
++
++
++extern void __iomem *led_port;
++
++#define DRV_NAME "a3g-button"
++
++#define EV_PRESSED       1
++#define EV_RELEASED      0
++#define RESET_BTN        0   /* reset button */
++
++#define _3G_BTN_BIT      0x04
++#define POL_RATE_MSECS   200
++#define MAX_EV_LEN       (sizeof(struct input_event))
++
++int  btn_ev_flag = 0;
++struct task_struct * btn_threadptr;
++
++struct input_event btn_event;
++
++static struct resource a3g_res = { 
++                      .name = "cs2",
++                      .start = 0x4e0100000ULL,
++                      .end = 0x4e0100300ULL,
++                      /*.flags = IORESOURCE_IO,*/
++                      .flags = IORESOURCE_MEM,
++                   };  
++
++
++static void __iomem *button_port = NULL;
++
++
++struct btndev_hw_data {
++        int abs_event;
++        unsigned long buttons;
++};
++
++struct btndev {
++        int exist;
++        int open;
++        int minor;
++        struct input_handle handle;
++        wait_queue_head_t wait;
++        struct list_head client_list;
++        spinlock_t client_lock; /* protects client_list */
++        struct mutex mutex;
++        struct device dev;
++
++        struct list_head mixdev_node;
++        int mixdev_open;
++
++        struct btndev_hw_data packet;
++        unsigned int pkt_count;
++};
++
++struct btndev * btndev_ptr;
++
++#define BTNDEV_MINOR_BASE  31
++#define BTNDEV_MINORS      31
++#define BTNDEV_ZERO	   0
++
++
++struct btndev_motion {
++   unsigned long buttons;
++};
++
++#define PACKET_QUEUE_LEN        16
++struct btndev_client {
++        struct fasync_struct *fasync;
++        struct btndev *btndev;
++        struct list_head node;
++
++        struct btndev_motion packets[PACKET_QUEUE_LEN];
++        unsigned int head, tail;
++        spinlock_t packet_lock;
++
++        signed char ps2[6];
++        unsigned char ready, buffer, bufsiz;
++        unsigned char imexseq, impsseq;
++        unsigned long last_buttons;
++};
++
++
++
++struct btndev *btndev_table[BTNDEV_MINORS];
++static DEFINE_MUTEX(btndev_table_mutex);
++
++static const struct input_device_id btndev_ids[] = {
++        {
++                .flags = INPUT_DEVICE_ID_MATCH_EVBIT |
++                                INPUT_DEVICE_ID_MATCH_KEYBIT |
++                                INPUT_DEVICE_ID_MATCH_RELBIT,
++                .evbit = { BIT_MASK(EV_KEY) | BIT_MASK(EV_REL) },
++        },      
++        {},
++};
++
++MODULE_DEVICE_TABLE(input, btndev_ids);
++static void btndev_remove_chrdev(struct btndev *btndev) {
++        mutex_lock(&btndev_table_mutex);
++        btndev_table[btndev->minor] = NULL;
++        mutex_unlock(&btndev_table_mutex);
++}
++
++
++/*********************************************************/
++static void btndev_mark_dead(struct btndev *btndev) {
++        mutex_lock(&btndev->mutex);
++        btndev->exist = 0;
++        mutex_unlock(&btndev->mutex);
++}
++
++/*********************************************************/
++static void btndev_cleanup(struct btndev *btndev)
++{
++        struct input_handle *handle = &btndev->handle;
++
++        btndev_mark_dead(btndev);
++        btndev_remove_chrdev(btndev);
++
++        if (btndev->open)
++                input_close_device(handle);
++}
++
++/**********************************************************/
++static void btndev_free(struct device * dev) {
++   struct btndev * btndevptr = container_of( dev, struct btndev, dev);
++   input_put_device( btndevptr->handle.dev);
++   kfree(btndevptr);
++}
++/**********************************************************/
++static int btndev_install_chrdev(struct btndev *btndev) {
++        btndev_table[btndev->minor] = btndev;
++        return 0;
++}
++
++/**********************************************************/
++static struct btndev *btndev_create(struct input_dev *dev,
++                                        struct input_handler *handler,
++                                        int minor)
++{
++        struct btndev *btndev;
++        int error;
++        btndev = kzalloc(sizeof(struct btndev), GFP_KERNEL);
++        if (!btndev) {
++                error = -ENOMEM;
++                goto err_out;
++        }
++
++
++        INIT_LIST_HEAD(&btndev->client_list);
++        INIT_LIST_HEAD(&btndev->mixdev_node);
++        spin_lock_init(&btndev->client_lock);
++        mutex_init(&btndev->mutex);
++        lockdep_set_subclass(&btndev->mutex, 0);
++        init_waitqueue_head(&btndev->wait);
++
++        dev_set_name(&btndev->dev, "event%d", minor);
++
++        btndev->minor = minor;
++        btndev->exist = 1;
++        btndev->handle.dev = input_get_device(dev);
++        btndev->handle.name = dev_name(&btndev->dev);
++        btndev->handle.handler = handler;
++        btndev->handle.private = btndev;
++
++        btndev->dev.class = &input_class;
++        if (dev)
++                btndev->dev.parent = &dev->dev;
++        btndev->dev.devt = MKDEV(INPUT_MAJOR, BTNDEV_MINOR_BASE + minor);
++        btndev->dev.release = btndev_free;
++        device_initialize(&btndev->dev);
++
++        error = input_register_handle(&(btndev->handle));
++        if (error) {
++           goto err_free_btndev;
++        }
++
++        error = btndev_install_chrdev(btndev);
++        if (error)
++                goto err_unregister_handle;
++
++        error = device_add(&btndev->dev);
++        if (error)
++                goto err_cleanup_btndev;
++
++        return btndev;
++
++ err_cleanup_btndev:
++        btndev_cleanup(btndev);
++ err_unregister_handle:
++        input_unregister_handle(&btndev->handle);
++ err_free_btndev:
++        put_device(&btndev->dev);
++ err_out:
++        return ERR_PTR(error);
++
++}
++
++
++/**********************************************************/
++static void btndev_destroy(struct btndev *btndev) {
++        device_del(&btndev->dev);
++        btndev_cleanup(btndev);
++        input_unregister_handle(&btndev->handle);
++        put_device(&btndev->dev);
++}
++
++
++/**********************************************************/
++static void btndev_event(struct input_handle *handle,
++                           unsigned int type, unsigned int code, int value) {
++    switch( type ) {
++
++        case EV_KEY:
++            break;
++        case EV_REL:
++            break;
++        default:
++            break;
++    }
++}
++
++
++static int btndev_open_device(struct btndev *btndev) {
++        int retval;
++
++        retval = mutex_lock_interruptible(&btndev->mutex);
++        if (retval)
++                return retval;
++
++        if (!btndev->exist)
++                retval = -ENODEV;
++        else if (!btndev->open++) {
++                retval = input_open_device(&btndev->handle);
++                if (retval)
++                        btndev->open--;
++        }
++
++        mutex_unlock(&btndev->mutex);
++        return retval;
++}
++
++
++/**********************************************************/
++static void btndev_attach_client(struct btndev *btndev, struct btndev_client *client) {
++        spin_lock(&btndev->client_lock);
++        list_add_tail_rcu(&client->node, &btndev->client_list);
++        spin_unlock(&btndev->client_lock);
++        synchronize_rcu();
++}
++
++/**********************************************************/
++static void btndev_detach_client(struct btndev *btndev,
++                                   struct btndev_client *client)
++{
++        spin_lock(&btndev->client_lock);
++        list_del_rcu(&client->node);
++        spin_unlock(&btndev->client_lock);
++        synchronize_rcu();
++}
++
++static int btndev_release(struct inode *inode, struct file *file) {
++   return 0;
++}
++
++/**********************************************************/
++static int btndev_open(struct inode *inode, struct file *file)
++{
++        struct btndev_client *client;
++        struct btndev *btndev;
++        int error;
++        int i;
++
++        i = iminor(inode) - BTNDEV_MINOR_BASE;
++
++        if (i >= BTNDEV_MINORS) {
++           printk(KERN_ERR "*** error btndev_open()\n");
++           return -ENODEV;
++        }
++
++        error = mutex_lock_interruptible(&btndev_table_mutex);
++        if (error) {
++                return error;
++        }    
++        btndev = btndev_table[i];
++        if (btndev)
++                get_device(&btndev->dev);
++        mutex_unlock(&btndev_table_mutex);
++
++        if (!btndev) {
++                return -ENODEV;
++        }    
++
++        client = kzalloc(sizeof(struct btndev_client), GFP_KERNEL);
++        if (!client) {
++                error = -ENOMEM;
++                goto err_put_btndev;
++        }    
++
++        spin_lock_init(&client->packet_lock);
++        client->btndev = btndev;
++        btndev_attach_client(btndev, client);
++
++        error = btndev_open_device(btndev);
++        if (error)
++                goto err_free_client;
++
++        file->private_data = client;
++        return 0;
++
++ err_free_client:
++        btndev_detach_client(btndev, client);
++        kfree(client);
++ err_put_btndev:
++        put_device(&btndev->dev);
++        return error;
++}
++
++static ssize_t btndev_write(struct file *file, const char __user *buffer, size_t count, loff_t *ppos) {
++   return 0; 
++}
++
++static int btndev_fasync(int fd, struct file *file, int on) {
++        struct btndev_client *client = file->private_data;
++
++        return fasync_helper(fd, file, on, &client->fasync);
++}
++
++static ssize_t btndev_read(struct file *file, char __user *buffer, size_t count, loff_t *ppos) {
++        struct btndev_client *client = file->private_data;
++        struct btndev *btndev = client->btndev;
++        signed char data[MAX_EV_LEN];
++        int retval = 0; 
++/*
++        if (!client->ready && !client->buffer && btndev->exist &&
++            (file->f_flags & O_NONBLOCK) && !btn_ev_flag) {
++*/
++        if (file->f_flags & O_NONBLOCK) {
++             /* 
++              * This read is from VFT, copy data to user buffer anyway.
++              *
++              */
++             spin_lock_irq(&client->packet_lock);
++             if (count > MAX_EV_LEN)
++                count = MAX_EV_LEN;
++             memcpy(data, (char*)&btn_event, count);
++             /* client->buffer -= count; */
++             spin_unlock_irq(&client->packet_lock);
++             if (copy_to_user(buffer, data, count))
++                  return -EFAULT;
++
++             return -EAGAIN;
++        }
++        retval = wait_event_interruptible(btndev->wait,
++                                          !btndev->exist || 
++                                          client->ready  || 
++                                          btn_ev_flag );
++        if( btn_ev_flag ) {
++           btn_ev_flag = 0;
++        }
++        if (retval)
++                return retval;
++        if (!btndev->exist)
++                return -ENODEV;
++        spin_lock_irq(&client->packet_lock);
++        if (count > MAX_EV_LEN)
++                count = MAX_EV_LEN;
++        memcpy(data, (char*)&btn_event, count);
++        client->buffer -= count;
++        spin_unlock_irq(&client->packet_lock);
++        if (copy_to_user(buffer, data, count))
++                return -EFAULT;
++
++        return MAX_EV_LEN;
++}
++
++
++static unsigned int btndev_poll(struct file *file, poll_table *wait) {
++
++   return 0;
++}
++
++
++
++static int btndev_connect(  struct input_handler *handler,
++                            struct input_dev *dev,
++                            const struct input_device_id *id){
++  
++     return 0;
++ }
++
++
++static void btndev_disconnect(struct input_handle *handle) {
++   
++}
++
++
++static const struct file_operations btndev_fops = {
++        .owner =        THIS_MODULE,
++        .read =         btndev_read,
++        .write =        btndev_write,
++        .poll =         btndev_poll,
++        .open =         btndev_open,
++        .release =      btndev_release,
++        .fasync =       btndev_fasync,
++};
++
++
++static struct input_handler btndev_handler = {
++        .event =        btndev_event,
++        .connect =      btndev_connect,
++        .disconnect =   btndev_disconnect,
++        .fops =         &btndev_fops,
++        .minor =        BTNDEV_MINOR_BASE,
++        .name =         "btndev",
++        .id_table =     btndev_ids,
++};
++
++
++
++
++
++
++/**************************************************/
++u8 enable_cs2( void ){
++   u8 val, reg;
++
++   reg = readb(led_port);
++   val = (reg | 0x02);
++   writeb(val, led_port);
++   return reg;
++}
++
++/**************************************************/
++void disable_cs2( u8 val ){
++   val &= ~0x02;
++   writeb(val, led_port);
++}
++
++/**************************************************/
++static int is_button_pressed(void) {
++   u8 saved, val = EV_REL;
++ 
++   if( led_port ) { 
++      saved = enable_cs2();
++      val = readb(button_port);
++      disable_cs2( saved );   
++   }
++   return ((val & _3G_BTN_BIT) == _3G_BTN_BIT) ? EV_REL : EV_KEY ;
++}
++
++
++/**************************************************/
++
++static struct input_dev * input_dev;
++
++static int button_dev_init(struct platform_device *parent_pdev)
++{
++	int error;
++
++
++        input_dev = input_allocate_device();
++        if( !input_dev ) {
++           printk(KERN_ERR "*** a3g-button: unable to allocate input_dev\n");
++           return -ENOMEM;
++        }
++
++        input_dev->name = "rst_button";
++        input_dev->phys = "a3g/input0";
++        input_dev->id.bustype = BUS_HOST;
++        input_set_capability( input_dev, EV_MSC, MSC_SCAN);
++        __set_bit( EV_KEY, input_dev->evbit);
++        __set_bit( EV_REL, input_dev->relbit);
++        error = input_register_device(input_dev);
++
++        if( error ) {
++           input_free_device( input_dev );
++           printk(KERN_ERR "*** a3g-button: error input_register_device()\n");
++           return error;
++        }
++
++        error = input_register_handler( &btndev_handler);
++        if( error ) {
++           printk(KERN_ERR "*** a3g-button: error input_register_handler()\n");
++           input_free_device( input_dev );
++           /*btndev_destroy(btndev_ptr);*/
++           return error;
++        }
++
++        btndev_ptr = btndev_create( input_dev , &btndev_handler, BTNDEV_ZERO);
++        if( IS_ERR(btndev_ptr) ) {
++           input_free_device( input_dev );
++           printk(KERN_ERR "*** a3g-button: error btndev_create()\n");
++           return PTR_ERR( btndev_ptr );
++        }
++
++	return 0;
++}
++
++
++
++static int btn_thread( void * data ) { 
++
++   struct task_struct * tsk = current;
++   struct sched_param param = { .sched_priority = 1}; 
++   int btn_last_state, btn_cur_state;
++   btn_cur_state = btn_last_state  = EV_REL;
++   
++
++   sched_setscheduler(tsk, SCHED_FIFO, &param);
++   set_freezable();
++
++    if( button_port ) {
++       btn_last_state = is_button_pressed();
++    }
++    while( !kthread_should_stop() ) { 
++
++      if( button_port ) { 
++         msleep(POL_RATE_MSECS);
++         if( button_port ) {
++            btn_cur_state = is_button_pressed();
++         }
++         if( btn_last_state != btn_cur_state ){
++/*
++            printk( KERN_INFO "state changed from %d to %d\n",
++                                             btn_last_state, btn_cur_state);
++*/
++            btn_last_state = btn_cur_state;
++            do_gettimeofday(&btn_event.time);
++            btn_event.type  = RESET_BTN;
++            btn_event.code  = btn_cur_state;
++            btn_event.value = btn_cur_state;
++            btn_ev_flag = 1;   /* wake up event read */
++            if( btndev_ptr ) {
++               wake_up_interruptible(&(btndev_ptr->wait));
++            }
++            
++         }
++      }   
++   }   
++
++   return 0;
++}
++
++
++/**************************************************/
++static int __init a3g_button_init(void) {
++
++   resource_size_t res_size;
++   struct resource *phys_res = &a3g_res;
++   int retval;
++
++   res_size = resource_size(phys_res); 
++
++   if( !request_mem_region(phys_res->start, res_size, phys_res->name) ) { 
++      printk(KERN_DEBUG "**** error request_mem_region()\n");
++      return -1; 
++   }   
++    
++   button_port = ioremap(phys_res->start, res_size);
++   if (button_port == NULL) {
++      release_mem_region(phys_res->start, res_size);
++      printk(KERN_DEBUG "*** Error ioremap()");
++      return -1; 
++   }   
++
++
++   retval = button_dev_init(NULL);
++   if( retval != 0 ) {
++      printk( KERN_ERR "*** failed button_dev_init() %d\n", retval);
++     iounmap(button_port);
++     button_port = NULL;
++     release_mem_region(a3g_res.start, (a3g_res.end - a3g_res.start + 1));
++     return -1;
++   } 
++
++   btn_threadptr = kthread_run( btn_thread, NULL, "btn_t");
++ 
++   retval = (btn_threadptr == NULL) ? -1 : 0;
++ 
++   return retval;
++ 
++  /* return platform_driver_register( &a3g_button_driver ); */
++}
++
++/**************************************************/
++static void __exit a3g_button_exit(void) {
++   /*platform_driver_unregister( &a3g_button_driver);*/
++   if( button_port ) {
++     iounmap(button_port);
++     button_port = NULL;
++     release_mem_region(a3g_res.start, (a3g_res.end - a3g_res.start + 1));
++   }
++   
++   btndev_destroy( btndev_ptr );
++   if( btn_threadptr ) {
++      kthread_stop(btn_threadptr);
++      btn_threadptr = NULL;
++   }
++
++   input_unregister_handler( &btndev_handler);
++   input_unregister_device(input_dev);
++}
++
++module_init( a3g_button_init );
++module_exit( a3g_button_exit );
++
++MODULE_AUTHOR("Hai Le");
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("Support for reset button on Apollo3G board");
++MODULE_ALIAS("platform:" DRV_NAME);
+diff -urN linux-4.0.1/drivers/input/misc/Makefile linux-4.0.1-wd1/drivers/input/misc/Makefile
+--- linux-4.0.1/drivers/input/misc/Makefile	2015-04-29 11:22:30.000000000 +0300
++++ linux-4.0.1-wd1/drivers/input/misc/Makefile	2015-05-02 17:04:04.399816995 +0300
+@@ -72,3 +72,4 @@
+ obj-$(CONFIG_INPUT_XEN_KBDDEV_FRONTEND)	+= xen-kbdfront.o
+ obj-$(CONFIG_INPUT_YEALINK)		+= yealink.o
+ obj-$(CONFIG_INPUT_IDEAPAD_SLIDEBAR)	+= ideapad_slidebar.o
++obj-y					+= a3g_button.o

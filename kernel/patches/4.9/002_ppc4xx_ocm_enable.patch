@@ -1,0 +1,39 @@
+diff -Naur a/rch/powerpc/sysdev/ppc4xx_ocm.c b/rch/powerpc/sysdev/ppc4xx_ocm.c
+--- a/arch/powerpc/sysdev/ppc4xx_ocm.c	2015-04-29 11:22:30.000000000 +0300
++++ b/arch/powerpc/sysdev/ppc4xx_ocm.c	2018-08-01 08:05:06.217742947 +0000
+@@ -109,7 +109,9 @@
+ 	struct ocm_info *ocm;
+ 
+ 	const unsigned int *cell_index;
++	const char *status;
+ 	const unsigned int *cache_size;
++
+ 	int len;
+ 
+ 	struct resource rsrc;
+@@ -124,9 +126,15 @@
+ 	}
+ 	ocm->index = *cell_index;
+ 
+-	if (of_device_is_available(node))
++	status = of_get_property(node, "status", &len);
++	if (status && strcmp(status,"disabled") == 0)
++		ocm->status = OCM_DISABLED;
++	else
+ 		ocm->status = OCM_ENABLED;
+ 
++//	if (of_device_is_available(node))
++//		ocm->status = OCM_ENABLED;
++
+ 	cache_size = of_get_property(node, "cached-region-size", &len);
+ 	if (cache_size)
+ 		ocm->cache_size = *cache_size;
+@@ -299,7 +307,7 @@
+ 		return -1;
+ 	}
+ 
+-	if (debugfs_create_file("info", 0644, junk, NULL, &ocm_debugfs_fops)) {
++	if (!debugfs_create_file("info", 0644, junk, NULL, &ocm_debugfs_fops)) {
+ 		printk(KERN_ALERT "debugfs ppc4xx ocm: failed to create file\n");
+ 		return -1;
+ 	}

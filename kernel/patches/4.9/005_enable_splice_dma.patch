@@ -1,0 +1,1643 @@
+diff -urN linux-2.6.32.70/fs/Kconfig linux-2.6.32.70-wd/fs/Kconfig
+--- linux-2.6.32.70/fs/Kconfig	2014-12-13 14:16:21.000000000 +0000
++++ linux-2.6.32.70-wd/fs/Kconfig	2014-06-22 17:51:26.000000000 +0000
+@@ -45,8 +45,6 @@
+ source "fs/btrfs/Kconfig"
+ source "fs/nilfs2/Kconfig"
+ 
+-endif # BLOCK
+-
+ config FILE_LOCKING
+ 	bool "Enable POSIX file locking API" if EMBEDDED
+ 	default y
+@@ -55,6 +53,15 @@
+           for filesystems like NFS and for the flock() system
+           call. Disabling this option saves about 11k.
+ 
++config SPLICE_DMA
++	bool "DMA support for Zero Copy Splice writes"
++	depends on AMCC_PPC460EX_460GT_4CHAN_DMA
++	default n
++	help
++	  DMA support for Zero-Copy splice write support. Also called receive file.
++
++endif # BLOCK
++
+ source "fs/notify/Kconfig"
+ 
+ source "fs/quota/Kconfig"
+diff -urN linux-2.6.32.70/fs/pipe.c linux-2.6.32.70-wd/fs/pipe.c
+--- linux-2.6.32.70/fs/pipe.c	2014-12-13 14:16:21.000000000 +0000
++++ linux-2.6.32.70-wd/fs/pipe.c	2014-06-22 17:51:26.000000000 +0000
+@@ -22,6 +22,8 @@
+ #include <asm/uaccess.h>
+ #include <asm/ioctls.h>
+ 
++static struct kmem_cache *pipe_info_cache __read_mostly;
++
+ /*
+  * We use a start+len construction, which provides full use of the 
+  * allocated memory.
+@@ -875,7 +877,7 @@
+ {
+ 	struct pipe_inode_info *pipe;
+ 
+-	pipe = kzalloc(sizeof(struct pipe_inode_info), GFP_KERNEL);
++	pipe = kmem_cache_zalloc(pipe_info_cache, GFP_KERNEL);
+ 	if (pipe) {
+ 		init_waitqueue_head(&pipe->wait);
+ 		pipe->r_counter = pipe->w_counter = 1;
+@@ -896,7 +898,8 @@
+ 	}
+ 	if (pipe->tmp_page)
+ 		__free_page(pipe->tmp_page);
+-	kfree(pipe);
++
++	kmem_cache_free(pipe_info_cache, pipe);
+ }
+ 
+ void free_pipe_info(struct inode *inode)
+@@ -1146,6 +1149,10 @@
+ 			unregister_filesystem(&pipe_fs_type);
+ 		}
+ 	}
++	if (!err) {
++		pipe_info_cache = KMEM_CACHE(pipe_inode_info, SLAB_PANIC);
++		printk(KERN_INFO "%s: pipe_inode_cache initialized\n", __FUNCTION__);
++	}
+ 	return err;
+ }
+ 
+diff -urN linux-2.6.32.70/fs/splice.c linux-2.6.32.70-wd/fs/splice.c
+--- linux-2.6.32.70/fs/splice.c	2014-12-13 14:16:21.000000000 +0000
++++ linux-2.6.32.70-wd/fs/splice.c	2014-06-22 17:51:26.000000000 +0000
+@@ -31,6 +31,48 @@
+ #include <linux/uio.h>
+ #include <linux/security.h>
+ #include <linux/socket.h>
++#include <asm/current.h>
++//#define DEBUG_SPLICE 1
++//#define DEBUG_SPLICE_DMA     1
++#define SPLICE_MAGIC           0xDEADBEEF
++
++
++#ifdef CONFIG_SPLICE_DMA
++static DEFINE_MUTEX(splice_dma_lock);
++extern int splice_dma_memcpy(struct splice_dma_desc *sd_p, unsigned int len);
++extern int
++ppc460ex_sgdma_pipebufs_memcpy(struct pipe_inode_info *pipe, void *dest, unsigned int length);
++#endif
++
++
++
++
++#ifdef SPLICE_DEFER_DMA
++#define MAX_SPLICE_WRITES	4
++#define MAX_SPLICE_PIPES	(MAX_SPLICE_WRITES + 1)
++static struct splice_dma_desc_defer* splice_write_queue[MAX_SPLICE_WRITES];
++static int splice_queue_ptr = 0;
++static int splice_queue_count = 0;
++static struct splice_pipe_defer* splice_write_pipes[MAX_SPLICE_PIPES];
++static void put_splice_pipe(struct pipe_inode_info *pipe);
++#endif
++
++//#define SPLICE_NO_IO	1
++
++//#define SPLICE_CHECK_SIGNAL_PENDING
++#define SPLICE_READ_ALL
++#define SPLICE_FAST
++
++static inline int ignore_splice_error ( long ret )
++{
++	switch ( ret )
++	{
++		case -EAGAIN		:
++		case -ERESTARTSYS	:
++		case -EINTR			: return 1;
++		default				: return 0;
++	}
++}
+ 
+ /*
+  * Attempt to steal a page from a pipe buffer. This should perhaps go into
+@@ -188,11 +230,16 @@
+ 	for (;;) {
+ 		if (!pipe->readers) {
+ 			send_sig(SIGPIPE, current, 0);
+-			if (!ret)
++			if (!ret) {
++				printk(KERN_ERR "%s:%s:%d\n"
++						"returning EPIPE\n", __FUNCTION__, __FILE__, __LINE__);
+ 				ret = -EPIPE;
++			}
+ 			break;
+ 		}
+ 
++			
++		//printk("pipe->nrbufs %d page_nr %d spd->nr_pages %d \n", pipe->nrbufs, page_nr, spd->nr_pages);
+ 		if (pipe->nrbufs < PIPE_BUFFERS) {
+ 			int newbuf = (pipe->curbuf + pipe->nrbufs) & (PIPE_BUFFERS - 1);
+ 			struct pipe_buffer *buf = pipe->bufs + newbuf;
+@@ -214,6 +261,7 @@
+ 
+ 			if (!--spd->nr_pages)
+ 				break;
++
+ 			if (pipe->nrbufs < PIPE_BUFFERS)
+ 				continue;
+ 
+@@ -221,14 +269,19 @@
+ 		}
+ 
+ 		if (spd->flags & SPLICE_F_NONBLOCK) {
+-			if (!ret)
++			if (!ret) {
++				printk(KERN_ERR "%s:%s:%d\n"
++						"returning EAGAIN\n", __FUNCTION__, __FILE__, __LINE__);
+ 				ret = -EAGAIN;
++			}
++
+ 			break;
+ 		}
+ 
+-		if (signal_pending(current)) {
++		if (signal_pending(current)) { // exists in distro-kernel
+ 			if (!ret)
+ 				ret = -ERESTARTSYS;
++
+ 			break;
+ 		}
+ 
+@@ -256,7 +309,7 @@
+ 
+ 	while (page_nr < spd_pages)
+ 		spd->spd_release(spd, page_nr++);
+-
++		
+ 	return ret;
+ }
+ 
+@@ -792,6 +845,848 @@
+ }
+ EXPORT_SYMBOL(splice_from_pipe_feed);
+ 
++
++static void
++release_splice_pipebufs_special(struct pipe_inode_info *pipe)
++{
++
++	for (;;) {
++		if (pipe->nrbufs) {
++			struct pipe_buffer *buf = pipe->bufs + pipe->curbuf;
++			const struct pipe_buf_operations *ops = buf->ops;
++			buf->len = 0;
++			ops->release(pipe, buf);
++			pipe->curbuf = (pipe->curbuf + 1) & (PIPE_BUFFERS - 1);
++			pipe->nrbufs--;
++		}
++		else
++			break;
++	}
++}
++
++
++/**
++ * __splice_from_pipe_special - splice data from a pipe to given actor
++ * @pipe:	pipe to splice from
++ * @sd:		information to @actor
++ * @actor:	handler that splices the data
++ *
++ * Description:
++ *    This function does little more than loop over the pipe and call
++ *    @actor to do the actual moving of a single struct pipe_buffer to
++ *    the desired destination. See pipe_to_file, pipe_to_sendpage, or
++ *    pipe_to_user. This function is a modified form of  __splice_from_pipe
++ *    and is customized for splice writes.
++ *
++ */
++ssize_t __splice_from_pipe_special(struct pipe_inode_info *pipe, struct splice_desc *sd,
++			   splice_actor *actor)
++{
++	int ret, retval, do_wakeup, len, not_copied, splice_size, to_copy, remaining;
++	unsigned int offset;
++	void *fsdata;
++	struct file *file = sd->u.file;
++	struct address_space *mapping = file->f_mapping;
++	loff_t page_pos = sd->pos;
++	int nrbufs = 0;
++
++	ret = 0;
++	retval = 0;
++	do_wakeup = 0;
++	len = sd->total_len;
++	sd->len = len;
++	nrbufs = pipe->nrbufs;
++	remaining = 0;
++	offset = sd->pos & ~PAGE_CACHE_MASK;
++
++#if 0
++	printk("%s:%s:%d len = %d, pipe->nrbufs = %d sd->pos=%lx\n",
++			__FILE__, __FUNCTION__, __LINE__, len, pipe->nrbufs, sd->pos);
++
++
++	printk("%s:%s:%d len = %d, pipe->nrbufs = %d\n",
++			__FILE__, __FUNCTION__, __LINE__, len, pipe->nrbufs);
++
++	for(i=pipe->curbuf; i<pipe->nrbufs; i++) {
++		struct pipe_buffer *pbuf = pipe->bufs + i;
++		printk("%s:%s:%d curbuf=%d pbuf->len=%d addr = %p\n",
++				__FILE__, __FUNCTION__, __LINE__, pipe->curbuf + i,
++				pbuf->len, (page_address(pbuf->page) + pbuf->offset));
++	}
++#endif
++
++	for (;;) {
++		if (pipe->nrbufs) {
++
++			struct pipe_buffer *buf = pipe->bufs + pipe->curbuf;
++			const struct pipe_buf_operations *ops = buf->ops;
++			offset = sd->pos & ~PAGE_CACHE_MASK;
++
++			if(len/PAGE_SIZE)
++				not_copied = PAGE_SIZE;
++			else
++				not_copied = len;
++
++
++			if (not_copied + offset > PAGE_CACHE_SIZE)
++				not_copied = PAGE_CACHE_SIZE - offset;
++
++			splice_size = not_copied;
++			struct page *page = NULL;
++			ret = pagecache_write_begin(file, mapping, page_pos, splice_size,
++					AOP_FLAG_UNINTERRUPTIBLE, &page, &fsdata);
++
++
++			if (unlikely(ret)) {
++				printk(KERN_ERR "%s:%s:%d\n"
++						"returning err %d\n", __FUNCTION__, __FILE__, __LINE__, ret);
++				goto out;
++			}
++
++			char *dst = kmap(page);
++			while(not_copied) {
++				buf = pipe->bufs + pipe->curbuf;
++				ops = buf->ops;
++
++#if 0
++				printk("%s:%s:%d buf->len=%d pipe->nrbufs=%d\n", 
++						__FILE__, __FUNCTION__, __LINE__, buf->len, pipe->nrbufs);
++
++				ret = buf->ops->confirm(pipe, buf);
++				if (unlikely(ret))
++					return ret;
++#endif
++
++				char *src = buf->ops->map(pipe, buf, 0);
++				offset = sd->pos & ~PAGE_CACHE_MASK;
++
++				if(not_copied >= buf->len) {
++					to_copy = buf->len;
++					if(remaining) {
++						to_copy = remaining;
++					}
++					//memcpy(dst + offset, src + buf->offset, to_copy);
++					cacheable_memcpy(dst + offset, src + buf->offset, to_copy);
++					not_copied -= to_copy;
++					remaining = 0;
++					buf->offset += to_copy;
++					buf->len -= to_copy;
++					buf->ops->unmap(pipe, buf, src);
++					ops->release(pipe, buf);
++					pipe->curbuf = (pipe->curbuf + 1) & (PIPE_BUFFERS - 1);
++					pipe->nrbufs--;
++					if(!pipe->nrbufs)
++						break;
++				}
++				else {
++					to_copy = not_copied;
++					//memcpy(dst + offset, src + buf->offset, not_copied);
++					cacheable_memcpy(dst + offset, src + buf->offset, not_copied);
++					remaining = buf->len - not_copied;
++					buf->offset += to_copy;
++					buf->len -= to_copy;
++					not_copied = 0;
++					buf->ops->unmap(pipe, buf, src);
++				}
++				sd->pos += to_copy;
++			}
++			kunmap(page);
++			retval += pagecache_write_end(file, mapping, page_pos, splice_size, splice_size,
++					page, fsdata);
++			len -= splice_size;
++			sd->total_len -= splice_size;
++			sd->len -= splice_size;
++			page_pos += splice_size;
++			//ret += splice_size;
++
++#if 0
++			printk("%s:%s:%d len=%d pipe->nrbufs=%d splice_size=%d retval=%d\n",
++					__FILE__, __FUNCTION__, __LINE__, len, pipe->nrbufs, splice_size, retval);
++#endif
++
++			if(!len)
++				break;
++		}
++
++		if(!pipe->nrbufs)
++			break;
++
++		if (sd->flags & SPLICE_F_NONBLOCK) {
++			if (!retval) {
++				printk(KERN_ERR "%s:%s:%d\n"
++						"returning EAGAIN\n", __FUNCTION__, __FILE__, __LINE__);
++				retval = -EAGAIN;
++			}
++			break;
++		}
++	}
++
++out:
++	//	printk("%s:%s:%d - returning %d\n", __FILE__, __FUNCTION__, __LINE__, retval);
++	return retval;
++}
++
++EXPORT_SYMBOL(__splice_from_pipe_special);
++
++#ifdef CONFIG_SPLICE_DMA
++ssize_t __splice_from_pipe_dma(struct pipe_inode_info *pipe, struct splice_desc *sd,
++			   splice_actor *actor)
++{
++	int ret, retval, do_wakeup, len, not_copied, splice_size, to_copy, remaining;
++	int begin_buf;
++	int nrbufs;
++	int mapcount;
++	unsigned int offset;
++	void *fsdata;
++	struct file *file;
++	struct address_space *mapping;
++	loff_t page_pos;
++	struct splice_dma_desc *sd_p = NULL;
++	unsigned long *pipe_addr_map = NULL;
++
++	begin_buf = pipe->curbuf;
++	nrbufs = pipe->nrbufs;
++	file = sd->u.file;
++	mapping = file->f_mapping;
++	page_pos = sd->pos;
++	ret = 0;
++	retval = 0;
++	do_wakeup = 0;
++	len = sd->total_len;
++	sd->len = len;
++	remaining = 0;
++	offset = sd->pos & ~PAGE_CACHE_MASK;
++
++#ifdef SPLICE_NO_IO
++	release_splice_pipebufs_special(pipe);
++	return sd->total_len;
++#endif
++
++	sd_p = kzalloc(sizeof(*sd_p), GFP_ATOMIC);
++	if(!sd_p) {
++		retval = -ENOMEM;
++		printk(KERN_ERR "%s:%s:%d\n"
++			"returning ENOMEM\n", __FUNCTION__, __FILE__, __LINE__);
++		goto cleanup;
++	}
++
++	pipe_addr_map = kzalloc(sizeof(*pipe_addr_map) * PIPE_BUFFERS, GFP_ATOMIC);
++	if(!pipe_addr_map) {
++		retval = -ENOMEM;
++		printk(KERN_ERR "%s:%s:%d\n"
++			"returning ENOMEM\n", __FUNCTION__, __FILE__, __LINE__);
++		goto cleanup;
++	}
++
++	for (;;) {
++		if (pipe->nrbufs) {
++			struct pipe_buffer *buf = pipe->bufs + pipe->curbuf;
++			const struct pipe_buf_operations *ops = buf->ops;
++			offset = sd->pos & ~PAGE_CACHE_MASK;
++			if(len/PAGE_SIZE)
++				not_copied = PAGE_SIZE;
++			else
++				not_copied = len;
++
++		
++			if (not_copied + offset > PAGE_CACHE_SIZE)
++				not_copied = PAGE_CACHE_SIZE - offset;
++
++			splice_size = not_copied;
++			struct page *page = NULL;
++
++			ret = pagecache_write_begin(file, mapping, page_pos, splice_size,
++					AOP_FLAG_UNINTERRUPTIBLE, &page, &fsdata);
++
++			if (unlikely(ret)) {
++				retval = ret;
++				printk(KERN_ERR "%s:%s:%d\n"
++						"returning err %d\n", 
++						__FUNCTION__, __FILE__, __LINE__, ret);
++				goto cleanup;
++			}
++
++			mapcount = 0;
++
++			sd_p->page = page;
++			sd_p->page_offset = page_pos;
++			sd_p->n_elems = 0;
++
++			char *dst = kmap(page);
++
++			while(not_copied) {
++
++				buf = pipe->bufs + pipe->curbuf;
++				ops = buf->ops;
++#if 0
++				printk("%s:%s:%d buf->len=%d pipe->nrbufs=%d\n", 
++						__FILE__, __FUNCTION__, __LINE__, buf->len, pipe->nrbufs);
++
++				ret = buf->ops->confirm(pipe, buf);
++				if (unlikely(ret)) {
++					retval = ret;
++					printk(KERN_ERR "%s:%s:%d\n"
++							"returning err %d\n",
++						__FUNCTION__, __FILE__, __LINE__, ret);
++					goto cleanup;
++				}
++#endif
++
++				char *src = buf->ops->map(pipe, buf, 0);
++				offset = sd->pos & ~PAGE_CACHE_MASK;
++				pipe_addr_map[pipe->curbuf] = (unsigned long)src;
++
++				if(not_copied >= buf->len) {
++					to_copy = buf->len;
++					if(remaining) {
++						to_copy = remaining;
++					}
++#if 0
++					printk("%s:%s:%d - src=0x%08x dst=0x%08x size=%d\n",
++							__FILE__, __FUNCTION__, __LINE__, src + buf->offset, dst + offset,
++							to_copy);
++#endif
++					sd_p->src_addrs[mapcount] = (unsigned long)(src + buf->offset);
++					sd_p->dst_addrs[mapcount] = (unsigned long)(dst + offset);
++#ifdef DEBUG_SPLICE
++					printk("src data %s\n",(char *)sd_p->src_addrs[mapcount]);
++#endif
++					sd_p->xfr_size[mapcount] = to_copy;
++					mapcount++;
++					sd_p->n_elems++;
++					not_copied -= to_copy;
++					remaining = 0;
++					buf->offset += to_copy;
++					buf->len -= to_copy;
++#if 0
++					printk("%s:%s:%d  releasing pipe buf not_copied=%d\n",
++							__FILE__, __FUNCTION__, __LINE__, not_copied);
++#endif
++					pipe->curbuf = (pipe->curbuf + 1) & (PIPE_BUFFERS - 1);
++					pipe->nrbufs--;
++
++				}
++				else {
++					to_copy = not_copied;
++#if 0
++					printk("%s:%s:%d - src=0x%08x dst=0x%08x size=%d\n",
++							__FILE__, __FUNCTION__, __LINE__, src + buf->offset, dst + offset,
++							not_copied);
++#endif
++					sd_p->src_addrs[mapcount] = (unsigned long)(src + buf->offset);
++					sd_p->dst_addrs[mapcount] = (unsigned long)(dst + offset);
++#ifdef DEBUG_SPLICE
++					printk("src data %s\n",(char *)sd_p->src_addrs[mapcount]);
++#endif
++					sd_p->xfr_size[mapcount] = not_copied;
++					mapcount++;
++					sd_p->n_elems++;
++					remaining = buf->len - not_copied;
++					buf->offset += to_copy;
++					buf->len -= to_copy;
++					not_copied = 0;
++				}
++				sd->pos += to_copy;
++				if(!pipe->nrbufs)
++					break;
++			}
++
++			mutex_lock(&splice_dma_lock);
++			ret = splice_dma_memcpy(sd_p, splice_size);
++			mutex_unlock(&splice_dma_lock);
++
++			if(ret) {
++				printk("%s:%s:%d\n"
++						"splice_dma_memcpy failed with %d\n",
++						__FILE__, __FUNCTION__, __LINE__, ret);
++				kunmap(page);
++				pagecache_write_end(file, mapping, page_pos, 0, 0,
++						page, fsdata);
++				retval = ret;
++				goto cleanup;
++			}
++
++			kunmap(page);
++			retval += pagecache_write_end(file, mapping, page_pos, splice_size, splice_size,
++					page, fsdata);
++			len -= splice_size;
++			sd->total_len -= splice_size;
++			sd->len -= splice_size;
++			page_pos += splice_size;
++			//ret += splice_size;
++
++#if 0
++			printk("%s:%s:%d len=%d pipe->nrbufs=%d splice_size=%d retval=%d\n",
++					__FILE__, __FUNCTION__, __LINE__, len, pipe->nrbufs, splice_size, retval);
++#endif
++
++			if(!len)
++				break;
++		}
++		
++		if(!pipe->nrbufs)
++			break;
++	
++
++		if (sd->flags & SPLICE_F_NONBLOCK) {
++			if (!retval) {
++				printk(KERN_ERR "%s:%s:%d\n"
++						"returning EAGAIN\n", __FUNCTION__, __FILE__, __LINE__);
++				retval = -EAGAIN;
++			}
++			break;
++		}
++	}
++
++cleanup:
++	if(sd_p)
++		kfree(sd_p);
++
++	pipe->curbuf = begin_buf;
++	for (;;) {
++		if (nrbufs) {
++			struct pipe_buffer *buf = pipe->bufs + pipe->curbuf;
++			const struct pipe_buf_operations *ops = buf->ops;
++			buf->len = 0;
++			if(pipe_addr_map && (pipe_addr_map[pipe->curbuf])) {
++				char *src = (char *)(pipe_addr_map[pipe->curbuf]);
++				buf->ops->unmap(pipe, buf, src);
++			}
++			ops->release(pipe, buf);
++			pipe->curbuf = (pipe->curbuf + 1) & (PIPE_BUFFERS - 1);
++			nrbufs--;
++		}
++		if(!nrbufs)
++			break;
++	}
++
++	if(pipe_addr_map)
++		kfree(pipe_addr_map);
++
++//	printk("%s:%s:%d - returning %d\n", __FILE__, __FUNCTION__, __LINE__, retval);
++	return retval;
++}
++EXPORT_SYMBOL(__splice_from_pipe_dma);
++#endif
++
++
++#ifdef SPLICE_DEFER_DMA
++
++static int
++splice_setup_xfr_sglist(struct splice_dma_desc_defer *sd_def,
++			struct splice_dma_desc *sd_p, int *mapcount)
++{
++	unsigned int offset;
++	struct splice_desc *sd = &(sd_def->sd);
++	struct pipe_inode_info *pipe = sd_def->pipe;
++	//int curbuf = sd_def->pipe_curbuf;
++	//int nrbufs = sd_def->pipe_nrbufs;
++	struct page *page = sd_def->page;
++	int len = sd->total_len;
++	int count = *mapcount;
++	int ret = 0, n_elems = 0, not_copied = 0, to_copy = 0;
++	int remaining = 0;
++
++	//printk("%s:%s:%d consuming pipe %p\n", __FILE__, __FUNCTION__, __LINE__, pipe);
++
++	offset = sd->pos & ~PAGE_CACHE_MASK;
++	if( (len > PAGE_SIZE) || ((len + offset) > PAGE_CACHE_SIZE)) {
++#if 0
++		printk("%s:%s:%d - filesystem data is not block aligned"
++			"len=%d , offset=0x%08x\n", __FILE__, __FUNCTION__,
++			__LINE__, len, offset);
++#endif
++		ret = -EFAULT;
++		goto out;
++	}
++
++	if(pipe->nrbufs) {
++		struct pipe_buffer *buf = pipe->bufs + pipe->curbuf;
++		const struct pipe_buf_operations *ops = buf->ops;
++		offset = sd->pos & ~PAGE_CACHE_MASK;
++
++		not_copied = len;
++		//printk("%s:%s:%d - calling page_address\n", __FILE__, __FUNCTION__, __LINE__);
++		char *dst = kmap(page);
++#if 0
++		printk("%s:%s:%d - kmap returns %p for page=%p\n",
++					__FILE__, __FUNCTION__, __LINE__, dst, page);
++#endif
++		while(not_copied) {
++			buf = pipe->bufs + pipe->curbuf;
++			ops = buf->ops;
++
++			ret = buf->ops->confirm(pipe, buf);
++			if (unlikely(ret)) {
++				printk("%s:%s:%d - ret is %d\n",
++						__FILE__, __FUNCTION__, __LINE__, ret);
++				goto out;
++			}
++
++			char *src = buf->ops->map(pipe, buf, 0);
++#if 0
++			printk("%s:%s:%d - buf->ops->map returns %p\n",
++					__FILE__, __FUNCTION__, __LINE__, src);
++#endif
++			offset = sd->pos & ~PAGE_CACHE_MASK;
++			sd_def->pipe_addr_map[n_elems++] = (unsigned long)src;
++
++			if(not_copied >= buf->len) {
++				to_copy = buf->len;
++				if(remaining) {
++					to_copy = remaining;
++				}
++				sd_p->src_addrs[count] =
++					(unsigned long)(src + buf->offset);
++				sd_p->dst_addrs[count] =
++					(unsigned long)(dst + offset);
++				sd_p->xfr_size[count] = to_copy;
++#if 0
++				sd_def->src_addrs[count] =
++					(unsigned long)(src + buf->offset);
++				sd_def->dst_addrs[count] =
++					(unsigned long)(dst + offset);
++				sd_def->xfr_size[count] = to_copy;
++#endif
++
++#if 0
++				printk("%s:%s:%d - src=%p, dst=%p, size=%d index=%d sd_p->n_elems=%d\n",
++				__FILE__, __FUNCTION__, __LINE__, sd_p->src_addrs[count],
++				sd_p->dst_addrs[count], sd_p->xfr_size[count], count, sd_p->n_elems);
++#endif
++				 
++				count++;
++				sd_p->n_elems++;
++				not_copied -= to_copy;
++				remaining = 0;
++				buf->offset += to_copy;
++				buf->len -= to_copy;
++				pipe->curbuf = (pipe->curbuf + 1) & (PIPE_BUFFERS - 1);
++				pipe->nrbufs--;
++			}
++			else {
++				to_copy = not_copied;
++				sd_p->src_addrs[count] =
++					(unsigned long)(src + buf->offset);
++				sd_p->dst_addrs[count] =
++					(unsigned long)(dst + offset);
++				sd_p->xfr_size[count] = not_copied;
++#if 0
++				sd_def->src_addrs[count] =
++					(unsigned long)(src + buf->offset);
++				sd_def->dst_addrs[count] =
++					(unsigned long)(dst + offset);
++				sd_def->xfr_size[count] = not_copied;
++#endif
++
++#if 0
++				printk("%s:%s:%d - src=%p, dst=%p, size=%d index=%d\n",
++				__FILE__, __FUNCTION__, __LINE__, sd_p->src_addrs[count],
++				sd_p->dst_addrs[count], sd_p->xfr_size[count], count);
++#endif
++
++				count++;
++				sd_p->n_elems++;
++				remaining = buf->len - not_copied;
++				buf->offset += to_copy;
++				not_copied = 0;
++			}
++			sd->pos += to_copy;
++			if(!pipe->nrbufs)
++				break;
++		}
++	}
++
++	sd_def->n_elems = n_elems;
++	*mapcount = count;
++
++out:
++	//printk("%s:%s:%d returning %d\n", __FILE__, __FUNCTION__, __LINE__, ret);
++	//printk("%s:%s:%d sd_p->n_elems=%d\n", __FILE__, __FUNCTION__, __LINE__, sd_p->n_elems);
++	return ret;
++}
++
++static void
++release_splice_pipebufs(struct splice_dma_desc_defer *sd_def)
++{
++
++	int n = 0;
++	struct pipe_inode_info *pipe = sd_def->pipe;
++	int nrbufs = sd_def->pipe_nrbufs;
++	int curbuf = sd_def->pipe_curbuf;
++
++	for (;;) {
++		if (nrbufs) {
++			struct pipe_buffer *buf = pipe->bufs + curbuf;
++#if 0
++			printk("%s:%s:%d - releasing buf %d\n",
++				__FILE__, __FUNCTION__, __LINE__, curbuf);
++#endif
++			const struct pipe_buf_operations *ops = buf->ops;
++			buf->len = 0;
++			if(sd_def->pipe_addr_map[n]) {
++				char *src = (char *)(sd_def->pipe_addr_map[n]);
++				buf->ops->unmap(pipe, buf, src);
++			}
++			ops->release(pipe, buf);
++			curbuf = (curbuf + 1) & (PIPE_BUFFERS - 1);
++			nrbufs--;
++			n++;
++		}
++		else
++			break;
++	}
++}
++
++
++static
++int splice_flush_dma_writes(void)
++{
++	loff_t pos;
++	void *fsdata;
++	struct file *file;
++	struct address_space *mapping;
++	int size=0, ret=0, i=0, mapcount=0;
++	struct splice_desc *sd;
++	struct splice_dma_desc_defer *sd_def = NULL;
++	struct page *page = NULL;
++	int total_splice_length = 0;
++	struct pipe_inode_info *pipe = NULL;
++	//printk("%s:%s:%d\n", __FILE__, __FUNCTION__, __LINE__);
++	struct splice_dma_desc *sd_p = NULL;
++
++	sd_p = kzalloc(sizeof(*sd_p), GFP_ATOMIC);
++	if(!sd_p)
++		return -ENOMEM;
++
++	for(i=0; i < MAX_SPLICE_WRITES; i++) {
++		sd_def = (struct splice_dma_desc_defer *)splice_write_queue[i];
++		if(sd_def && sd_def->valid) {
++			page = NULL;
++			sd = &(sd_def->sd);
++			pos = sd->pos;
++			file = sd->u.file;
++			mapping = file->f_mapping;
++			size = sd->total_len;
++#if 0
++			printk("%s:%s:%d - calling pagecache_write_begin i=%d\n",
++				__FILE__, __FUNCTION__, __LINE__, i);
++			printk("file is %s , mapping is %s\n",
++			(file) ? "Not NULL":"NULL", (mapping) ? "Not NULL":"NULL"); 
++#endif
++			ret = pagecache_write_begin(file, mapping, pos, size,
++					AOP_FLAG_UNINTERRUPTIBLE, &page, &fsdata);
++			if (unlikely(ret)) {
++				printk("%s:%s:%d - pagecache_write_begin returns %d\n",
++				__FILE__, __FUNCTION__, __LINE__, ret);
++				goto out;
++			}
++			sd_def->page = page;
++			sd_def->fsdata = fsdata;
++			ret = splice_setup_xfr_sglist(sd_def, sd_p, &mapcount);
++#if 0
++			printk("%s:%s:%d - sd_p->n_elems = %d\n",
++					__FILE__, __FUNCTION__, __LINE__, sd_p->n_elems);
++#endif
++			if(ret)
++				goto out;
++			total_splice_length += size;
++		}
++	}
++
++	//printk("%s:%s:%d - nrelems = %d\n", __FILE__, __FUNCTION__, __LINE__, sd_p->n_elems);
++
++	ret = splice_dma_memcpy(sd_p, total_splice_length);
++	if(ret) {
++		printk("%s:%s:%d - splice_dma_memcpy failed with %d\n",
++				__FILE__, __FUNCTION__, __LINE__, ret);
++		goto out;
++	}
++
++	for(i=0; i < MAX_SPLICE_WRITES; i++) {
++		sd_def = splice_write_queue[i];
++		if(sd_def && sd_def->valid) {
++			sd = &(sd_def->sd);
++			page = sd_def->page;
++			pos = sd->pos;
++			file = sd->u.file;
++			mapping = file->f_mapping;
++			size = sd->total_len;
++			fsdata = sd_def->fsdata;
++			pipe = sd_def->pipe;
++			ret = pagecache_write_end(file, mapping, pos,
++					size, size, page, fsdata);
++			sd_def->valid = 0;
++			kunmap(page);
++			release_splice_pipebufs(sd_def);
++#if 0
++			printk("%s:%s:%d - done with pipe %p\n", __FILE__, __FUNCTION__, __LINE__,
++					pipe);
++#endif
++			put_splice_pipe(pipe);
++			//sd_def->pipe = NULL;
++		}
++	}
++
++
++out:
++	//printk("%s:%s:%d returning %d \n", __FILE__, __FUNCTION__, __LINE__, ret);
++	kfree(sd_p);
++	return ret;
++}
++
++
++ssize_t __splice_write_defer(struct pipe_inode_info *pipe, struct splice_desc *sd, splice_actor *actor)
++{
++
++	unsigned int offset;
++	int ret = 0, i = 0;
++	struct splice_dma_desc_defer *sd_def = NULL;
++	int len = sd->total_len;
++	int total_splice_length = 0;
++	int splice_dma_flush = 0;
++	struct file *file = sd->u.file;
++	int same_blk = 0;
++//	int curbuf = pipe->curbuf;
++//	int nrbufs = pipe->nrbufs;
++
++	offset = sd->pos & ~PAGE_CACHE_MASK;
++
++
++	//printk("%s:%s:%d sd->pos = %llx\n", __FILE__, __FUNCTION__, __LINE__, sd->pos);
++
++	/* un-aligned page writes */
++	if((offset & (~PAGE_CACHE_MASK)) || (len > PAGE_SIZE)) {
++#if 0
++		printk("%s:%s:%d - un-aligned page writes\n",
++					__FILE__, __FUNCTION__, __LINE__);
++#endif
++		return __splice_from_pipe_dma(pipe, sd, actor);
++	}
++
++	if((sd->pos == 0) && (len < PAGE_SIZE))
++		return __splice_from_pipe_dma(pipe, sd, actor);
++#if 0
++	if((splice_queue_ptr + 1) >= MAX_SPLICE_WRITES)
++		splice_dma_flush = 1;
++#endif
++
++	//printk("%s:%s:%d\n", __FILE__, __FUNCTION__, __LINE__);
++	/* If write request for same page in same file exists in splice queue */
++	for(i = 0; i < MAX_SPLICE_WRITES; i++) {
++		sd_def = (struct splice_dma_desc_defer *)splice_write_queue[i];
++		if(sd_def && sd_def->valid) {
++			if ((sd_def->sd.u.file == file) &&
++					(sd_def->sd.pos == sd->pos) ) {
++				//printk("%s:%s:%d - same blk writes\n", __FILE__, __FUNCTION__, __LINE__);
++				//pipe->curbuf = sd_def->pipe_curbuf;  
++				//pipe->nrbufs = sd_def->pipe_nrbufs;
++				__splice_from_pipe_dma(sd_def->pipe, &(sd_def->sd), actor);
++				sd_def-> valid = 0;
++				//same_blk = 1;
++				--splice_queue_count;
++				//return __splice_from_pipe_dma(pipe, sd, actor);
++			}
++		}
++	}
++
++	//pipe->curbuf = curbuf;
++	//pipe->nrbufs = nrbufs;
++#if 0
++	if(same_blk)
++		splice_dma_flush = 0;
++#endif
++
++	sd_def = splice_write_queue[splice_queue_ptr];
++	if(!sd_def) {
++	/* Fisrt time alloc */
++		sd_def = kzalloc(sizeof(*sd_def), GFP_KERNEL);
++		if(!sd_def) {
++			ret = -ENOMEM;
++			goto out;
++		}
++		splice_write_queue[splice_queue_ptr] = sd_def;
++	}
++
++	sd_def = splice_write_queue[splice_queue_ptr];
++	sd_def->sd.total_len = sd->total_len;
++	sd_def->sd.flags = sd->flags;
++	sd_def->sd.pos = sd->pos;
++	sd_def->sd.u.file = sd->u.file;
++	sd_def->f_offset = offset;
++	sd_def->pipe_curbuf = pipe->curbuf;
++	sd_def->pipe_nrbufs = pipe->nrbufs;
++	sd_def->pipe = pipe;
++	sd_def->valid = 1;
++	++splice_queue_count;
++#if 0
++	printk("%s:%s:%d - pipe->curbuf=%d , pipe->nrbufs=%d splice_queue_ptr=%d\n",
++		__FILE__, __FUNCTION__, __LINE__, pipe->curbuf, pipe->nrbufs, splice_queue_ptr);
++#endif
++
++	splice_queue_ptr = (splice_queue_ptr + 1) & (MAX_SPLICE_WRITES - 1);
++	if(splice_queue_count >= MAX_SPLICE_WRITES) {
++		/* flush splice queue */
++		//printk("%s:%s:%d - dma flush\n", __FILE__, __FUNCTION__, __LINE__);
++		splice_queue_count = 0;
++		ret = splice_flush_dma_writes();
++		if(ret <= 0)
++			goto out;
++	}
++	//pipe->curbuf = (pipe->curbuf + pipe->nrbufs) & (PIPE_BUFFERS - 1);
++	//pipe->nrbufs = 0;
++	ret = len;
++
++out:
++	return ret;
++}
++EXPORT_SYMBOL(__splice_write_defer);
++
++#endif
++
++/**
++ * splice_from_pipe - splice data from a pipe to a file
++ * @pipe:	pipe to splice from
++ * @out:	file to splice to
++ * @ppos:	position in @out
++ * @len:	how many bytes to splice
++ * @flags:	splice modifier flags
++ * @actor:	handler that splices the data
++ *
++ * Description:
++ *    See __splice_from_pipe. This function locks the input and output inodes,
++ *    otherwise it's identical to __splice_from_pipe(). This is a special
++ *    implementation fpr receive file.
++ *
++ */
++ssize_t splice_from_pipe_special(struct pipe_inode_info *pipe, struct file *out,
++			 loff_t *ppos, size_t len, unsigned int flags,
++			 splice_actor *actor)
++{
++	ssize_t ret;
++	struct splice_desc sd = {
++		.total_len = len,
++		.flags = flags,
++		.pos = *ppos,
++		.u.file = out,
++	};
++
++	/*
++	 * The actor worker might be calling ->prepare_write and
++	 * ->commit_write. Most of the time, these expect i_mutex to
++	 * be held. Since this may result in an ABBA deadlock with
++	 * pipe->inode, we have to order lock acquiry here.
++	 */
++	pipe_lock(pipe);
++#ifdef CONFIG_SPLICE_DMA
++	ret = __splice_from_pipe_dma(pipe, &sd, actor);
++#else
++	ret = __splice_from_pipe_special(pipe, &sd, actor);
++#endif
++	pipe_unlock(pipe);
++
++	return ret;
++}
+ /**
+  * splice_from_pipe_next - wait for some data to splice from
+  * @pipe:	pipe to splice from
+@@ -814,7 +1709,7 @@
+ 		if (sd->flags & SPLICE_F_NONBLOCK)
+ 			return -EAGAIN;
+ 
+-		if (signal_pending(current))
++		if (signal_pending(current)) // exists in distro-kernel
+ 			return -ERESTARTSYS;
+ 
+ 		if (sd->need_wakeup) {
+@@ -950,35 +1845,27 @@
+ 		.u.file = out,
+ 	};
+ 	ssize_t ret;
++	int err = 0;
+ 
+ 	ret = generic_write_checks(out, ppos, &len, S_ISBLK(inode->i_mode));
+ 	if (ret)
+ 		return ret;
+ 	sd.total_len = len;
+ 	sd.pos = *ppos;
+-
+-	pipe_lock(pipe);
+-
+-	splice_from_pipe_begin(&sd);
+-	do {
+-		ret = splice_from_pipe_next(pipe, &sd);
+-		if (ret <= 0)
+-			break;
+-
+-		mutex_lock_nested(&inode->i_mutex, I_MUTEX_CHILD);
+-		ret = file_remove_suid(out);
+-		if (!ret) {
+-			file_update_time(out);
+-			ret = splice_from_pipe_feed(pipe, &sd, pipe_to_file);
+-		}
+-		mutex_unlock(&inode->i_mutex);
+-	} while (ret > 0);
+-	splice_from_pipe_end(pipe, &sd);
+-
+-	pipe_unlock(pipe);
+-
+-	if (sd.num_spliced)
+-		ret = sd.num_spliced;
++	
++    err = file_remove_suid(out);
++    if(err) {
++           release_splice_pipebufs_special(pipe);
++           printk(KERN_ERR "%s:%s:%d\n"
++                           "returning err %d.\n",
++                            __FUNCTION__, __FILE__, __LINE__,
++                            err);
++           return err;
++    }
++    file_update_time(out);
++    mutex_lock(&inode->i_mutex);
++    ret = splice_from_pipe_special(pipe, out, ppos, len, flags, pipe_to_file);
++    mutex_unlock(&inode->i_mutex);
+ 
+ 	if (ret > 0) {
+ 		unsigned long nr_pages;
+@@ -1372,6 +2259,496 @@
+ 	return -EINVAL;
+ }
+ 
++#if 0
++static void print_pipe(struct pipe_inode_info *pipe)
++{
++	int nrbufs = pipe->nrbufs;
++	int i = 0;
++
++	printk("pipe->nrbufs = %d\n", pipe->nrbufs);
++	for(i=0; i<nrbufs; i++)
++		printk("nr = %d, pipe->bufs[i].len = %d, pipe->bufs[i].offset = %d\n",
++				i, pipe->bufs[i].len, pipe->bufs[i].offset);
++}
++
++static void print_data(struct pipe_inode_info *pipe)
++{
++	int i;
++	int nrbufs = pipe->nrbufs;
++	char strbuf[256];
++	struct pipe_buffer *buf = NULL;
++	void *mem = NULL;
++	
++
++	for(i=0; i<nrbufs; i++) {
++		buf = &(pipe->bufs[i]);
++		buf->ops->confirm(pipe, buf);
++		mem = (void *)page_address(buf->page);
++		memset(strbuf, 0, 256);
++		memcpy(strbuf, mem, 256);
++		printk("%s:%s:%d - memory in strbuf is %s\n", __FILE__, __FUNCTION__, __LINE__, strbuf);
++	}
++}
++
++static void
++adjust_pipe_splice_bufs(struct pipe_inode_info *pipe, void *splice_mem, int nrpages, int total_len)
++{
++	unsigned long offset;
++	int old_curbuf = pipe->curbuf;
++	int len = total_len;
++
++#ifdef DEBUG_SPLICE
++	printk("%s:%s:%d pipe->nrbufs=%d \n", __FILE__, __FUNCTION__, __LINE__, pipe->nrbufs);
++#endif
++	
++
++	if (pipe->inode) {
++		printk("%s:%s:%d - locking pipe->inode->i_mutex\n", __FILE__, __FUNCTION__, __LINE__);
++		mutex_lock(&pipe->inode->i_mutex);
++	}
++
++	for(;;) {
++		if(pipe->nrbufs) {
++			struct pipe_buffer *buf = pipe->bufs + pipe->curbuf;
++			const struct pipe_buf_operations *ops = buf->ops;
++
++			if(buf->len) {
++#ifdef DEBUG_SPLICE
++				printk("%s:%s:%d - freeing buf %d\n",
++						__FILE__, __FUNCTION__, __LINE__, pipe->curbuf);
++#endif
++				buf->len = 0;
++				ops->release(pipe, buf);
++				buf->private = 0;
++			}
++
++			pipe->nrbufs--;
++			pipe->curbuf = (pipe->curbuf + 1) & (PIPE_BUFFERS - 1);
++
++		}
++		else
++			break;
++	}
++
++	pipe->curbuf = old_curbuf; 
++
++#ifdef DEBUG_SPLICE
++	printk("%s:%s:%d - pipe->curbuf = %d pipe->nrbufs = %d\n",
++				__FILE__, __FUNCTION__, __LINE__, pipe->curbuf, pipe->nrbufs);
++#endif
++
++	for(;;) {
++		int newbuf = (pipe->curbuf + pipe->nrbufs) & (PIPE_BUFFERS - 1);
++		struct pipe_buffer *buf = pipe->bufs + newbuf;
++
++		offset = PAGE_SIZE * pipe->nrbufs;
++		if(len) {
++			if(len/PAGE_SIZE) {
++				buf->page = virt_to_page(splice_mem + offset);
++				buf->len = PAGE_SIZE;
++				buf->offset = 0;
++				len -= PAGE_SIZE;
++				pipe->nrbufs++;
++				buf->private = SPLICE_MAGIC;
++			}
++			else { 	/* partial Page */
++				buf->page = virt_to_page(splice_mem + offset);
++				buf->len = len;
++				buf->offset = 0;
++				len = 0;
++				pipe->nrbufs++;
++				buf->private = SPLICE_MAGIC;
++				break;
++			}
++		}
++		else
++			break;
++	}
++
++	if (pipe->inode) {
++		printk("%s:%s:%d - unlocking pipe->inode->i_mutex\n", __FILE__, __FUNCTION__, __LINE__);
++		mutex_unlock(&pipe->inode->i_mutex);
++	}
++}
++
++
++static void
++ppc460ex_pipebufs_memcpy(struct pipe_inode_info *pipe, void *splice_mem, int length)
++{
++	int len = 0;
++	int nrbufs = pipe->nrbufs;
++	void *src = NULL;
++	int curbuf = pipe->curbuf;
++
++	if (pipe->inode) {
++		printk("%s:%s:%d - locking pipe->inode->i_mutex\n", __FILE__, __FUNCTION__, __LINE__);
++		mutex_lock(&pipe->inode->i_mutex);
++	}
++
++	for(;;) {
++		if(nrbufs) {
++			struct pipe_buffer *buf = pipe->bufs + curbuf;
++			if(len < length) {
++				if(!buf->len)
++					continue;
++
++				src = page_address(buf->page);
++				memcpy(splice_mem + len, src+buf->offset, buf->len);  
++				//flush_dcache_page(buf->page);
++
++				len += buf->len;
++				curbuf = (curbuf + 1) & (PIPE_BUFFERS - 1);
++				--nrbufs;
++			}
++			else    /* all pipe buf copied*/
++				break;
++		}
++		else
++			break;
++	}
++	if (pipe->inode) {
++		printk("%s:%s:%d - locking pipe->inode->i_mutex\n", __FILE__, __FUNCTION__, __LINE__);
++		mutex_unlock(&pipe->inode->i_mutex);
++	}
++}
++
++#endif	/* 0 */
++
++#ifdef SPLICE_DEFER_DMA
++
++static void put_splice_pipe(struct pipe_inode_info *pipe)
++{
++#if 0
++	int index = pipe->private;
++	struct splice_pipe_defer *pipe_def = splice_write_pipes[index];
++	pipe_def->available = 1;
++#endif
++	int i = 0;
++	struct splice_pipe_defer *pipe_def = NULL;
++	struct pipe_inode_info *pipe_local = NULL;
++
++	//printk("%s:%s:%d - pipe =%p\n", __FILE__, __FUNCTION__, __LINE__, pipe);
++	for(i=0; i<MAX_SPLICE_PIPES; i++) {
++		pipe_def = (struct splice_pipe_defer *)splice_write_pipes[i];
++		if(pipe_def && pipe_def->pipe) {
++			pipe_local = pipe_def->pipe;
++#if 0
++			printk("%s:%s:%d - pipe_local =%p\n",
++				__FILE__, __FUNCTION__, __LINE__, pipe_local);
++#endif
++			if(pipe == pipe_local) {
++				pipe_def->available = 1;
++				return;
++			}
++		}
++	}
++	printk("%s:%s:%d - pipe not found !!!!\n",  __FILE__, __FUNCTION__, __LINE__);
++}
++
++static struct pipe_inode_info *get_splice_pipe(void)
++{
++	int i = 0;
++	struct splice_pipe_defer *pipe_def = NULL;
++	struct pipe_inode_info *pipe = NULL;
++	
++	for(i=0; i<MAX_SPLICE_PIPES; i++) {
++		pipe_def = (struct pipe_inode_info *)splice_write_pipes[i];
++		if(pipe_def) {
++			if(pipe_def->available) {
++				pipe_def->available = 0;
++				pipe = pipe_def->pipe;
++				//pipe->private = i;
++				goto out;
++			}
++		}
++		else {
++			pipe_def = kzalloc(sizeof(*pipe_def), GFP_KERNEL); 
++			if(!pipe_def) {
++				printk("%s:%s:%d - error allocating memory for splice_pipe_defer\n",
++						__FILE__, __FUNCTION__, __LINE__);
++				goto out;
++			}
++			pipe = alloc_pipe_info(NULL);
++			if (!pipe) {
++				printk("%s %s:%d alloc_pipe_info failed\n",
++						__FUNCTION__, __FILE__, __LINE__);
++				goto out;
++			}
++			pipe_def->pipe = pipe;
++			pipe_def->available = 0;
++			splice_write_pipes[i] = pipe_def;
++			//pipe->private = i;
++			break;
++		}
++	}
++
++out:
++	return pipe;
++}
++#endif
++			
++static long do_splice_2(int fd_in, struct file *in, loff_t __user *off_in,
++		      int fd_out, struct file *out, loff_t __user *off_out,
++		      size_t len, unsigned int flags)
++{
++	struct pipe_inode_info *pipe;
++	loff_t offset, *off;
++	long ret;
++	size_t spliced_len;
++
++	if (signal_pending(current)) {
++		printk(KERN_ERR "%s:%s:%d\n"
++					"signal pending returning EINTR.\n", 
++					__FUNCTION__, __FILE__, __LINE__);
++		return -EINTR;
++	}
++
++#ifdef DEBUG_SPLICE
++	printk("%s:%s:%d - len=%d\n", __FILE__, __FUNCTION__, __LINE__, len);
++#endif
++
++#ifndef SPLICE_DEFER_DMA
++	pipe = alloc_pipe_info(NULL);
++	if (!pipe) {
++		printk( KERN_ERR "%s %s:%d\n"
++					"alloc_pipe_info failed.\n",
++					__FUNCTION__, __FILE__, __LINE__);
++		return -ENOMEM;
++	}
++
++	/*
++	 * We don't have an immediate reader, but we'll read the stuff
++	 * out of the pipe right after the splice_to_pipe(). So set
++	 * PIPE_READERS appropriately.
++	 */
++	pipe->readers = 1;
++
++#else
++
++	pipe = get_splice_pipe();
++	if(!pipe) {
++		printk(KERN_ERR "%s:%s:%d\n"
++				"returning ENOMEM.\n", 
++				__FUNCTION__, __FILE__, __LINE__);
++		return -ENOMEM;
++	}
++
++	pipe->readers = 1;
++#endif
++
++	if (off_in) {
++		printk(KERN_ERR "%s:%s:%d\n"
++				"off_in is seekable.\n",
++				__FUNCTION__, __FILE__, __LINE__);
++		ret = -ESPIPE;
++		goto out;
++	}
++	if (off_out) {
++		if (out->f_op->llseek == no_llseek) {
++			printk(KERN_ERR "%s:%s:%d\n"
++					"out is non-seekable.\n",
++					__FUNCTION__, __FILE__, __LINE__);
++			ret = -EINVAL;
++			goto out;
++		}
++		if (copy_from_user(&offset, off_out, sizeof(loff_t))) {
++			printk(KERN_ERR "%s:%s:%d\n"
++					"copy_from_user failed.\n",
++					__FUNCTION__, __FILE__, __LINE__);
++			ret = -EFAULT;
++			goto out;
++		}
++		off = &offset;
++	} else
++		off = &out->f_pos;
++
++
++#ifdef DEBUG_SPLICE
++	printk("%s:%s:%d - calling in->f_op.splice_read len=%d\n",
++			__FILE__, __FUNCTION__, __LINE__, len);
++#endif
++
++#ifndef SPLICE_READ_ALL
++	ret = in->f_op->splice_read(in, off_in, pipe, len, flags);
++
++#ifdef DEBUG_SPLICE
++	printk("%s:%s:%d - ret from sock_splice_read =%d\n", __FILE__, __FUNCTION__, __LINE__, ret);
++#endif
++
++	if(!ret) {
++		printk(KERN_ERR "%s:%s:%d\n"
++				"sock_splice_read read nothing.\n",
++				__FILE__, __FUNCTION__, __LINE__);
++		ret = -EAGAIN;
++		goto out;
++	}
++
++
++#ifdef DEBUG_SPLICE
++	printk("%s:%s:%d - Number of pipe bufs = %d\n",
++				__FILE__, __FUNCTION__, __LINE__, pipe->nrbufs);  
++#endif
++
++	if ( ret != len )
++	{
++		printk( KERN_ERR "%s:%s:%d\n"
++					"splice read %ld instead of %d, offset is %d.\n",
++					__FILE__, __FUNCTION__, __LINE__, 
++					ret, len, (off == NULL) ? 0 : *off );
++	}
++
++	/** save the returned data length */
++	spliced_len = ret;
++
++#else // SPLICE_READ_ALL
++	{
++		size_t data_len;
++		int	   attempt;
++
++		/** init */
++		data_len	= len	;
++		spliced_len = 0		;
++		attempt		= 0		;
++
++		/** read data until expected length is received */
++		while ( data_len )
++		{
++			attempt++;
++
++			/** read data (calls tcp_splice_read() in tcp.c) */
++			ret = in->f_op->splice_read( in, off_in, pipe, data_len, flags );
++
++			/** handle error status */
++			if( ret <= 0 ) 
++			{
++#ifdef DEBUG_SPLICE
++				printk( KERN_ERR "%s:%s:%d\n"
++							"sock_splice_read read error %ld.\n",
++						    __FILE__, __FUNCTION__, __LINE__, 
++							ret );
++#endif
++				/** fail on specific errors */
++				if ( ret == 0 || ! ignore_splice_error ( ret ) )
++				{
++#ifdef DEBUG_SPLICE
++					printk( KERN_ERR "%s:%s:%d\n"
++								"returning read error %ld "
++								"after reading %d out of %d bytes.\n",
++								__FILE__, __FUNCTION__, __LINE__, 
++								ret, spliced_len, len );
++#endif
++					release_splice_pipebufs_special(pipe);
++					goto out;
++				}	
++			}
++			
++			/** compute the balance data to be read in next iteration */
++			if ( ret > 0 )
++			{
++				data_len	-= ret;
++				spliced_len += ret;
++			}
++
++			/** warn if attempting more than 1 splice read */
++			if ( data_len != 0 )
++			{
++				printk( KERN_ERR "%s:%s:%d\n"
++							"Warning: Could not read all the data on "
++							"attempt# %d. Read: %ld, Total Read: %d"
++							" ... trying again.\n",
++							__FILE__, __FUNCTION__, __LINE__, 
++							attempt, ret, spliced_len );
++			}
++		}
++
++		/** warn if more data than expected is read */
++		// NB: Should not happen
++		if ( spliced_len != len )
++		{
++			printk( KERN_ERR "%s:%s:%d\n"
++						"Should Not Happen. "
++						"splice read %ld instead of %d, offset is %lld.\n",
++						__FILE__, __FUNCTION__, __LINE__, 
++						ret, len, (off == NULL) ? 0 : *off );
++		}
++
++	}
++#endif // SPLICE_READ_ALL
++
++	ret = do_splice_from(pipe, out, off, spliced_len, flags);
++
++#ifdef DEBUG_SPLICE
++	printk("%s:%s:%d do_splice_from returns %d\n", __FILE__, __FUNCTION__, __LINE__,
++			ret);
++#endif
++
++	/** handle errors */
++	if ( ret < 0 )
++	{
++		release_splice_pipebufs_special(pipe);
++		goto out;
++	}
++
++	if ( ret != spliced_len )
++	{
++		printk( KERN_ERR "%s:%s:%d\n"
++					"splice wrote %ld instead of %d\n", 
++					__FILE__, __FUNCTION__, __LINE__, 
++					ret, spliced_len );
++	}
++
++	if (off_out && copy_to_user(off_out, off, sizeof(loff_t))) {
++		printk(KERN_ERR "%s:%s:%d copy_to_user failed\n",
++					__FILE__, __FUNCTION__, __LINE__);
++		ret = -EFAULT;
++	}
++
++#ifdef DEBUG_SPLICE
++	printk("%s:%s:%d returning ret=%d\n", __FILE__, __FUNCTION__, __LINE__, ret);
++#endif
++
++out:
++   	kfree(pipe);	
++
++	if ( ret < 0 )
++	{
++		printk( KERN_ERR "%s:%s:%d\n"
++					"returning ret=%ld\n", 
++					__FILE__, __FUNCTION__, __LINE__, 
++					ret );
++	}
++
++	return ret;
++}
++/*
++ * Do a copy-from-user while holding the mmap_semaphore for reading, in a
++ * manner safe from deadlocking with simultaneous mmap() (grabbing mmap_sem
++ * for writing) and page faulting on the user memory pointed to by src.
++ * This assumes that we will very rarely hit the partial != 0 path, or this
++ * will not be a win.
++ */
++static int copy_from_user_mmap_sem(void *dst, const void __user *src, size_t n)
++{
++	int partial;
++
++	if (!access_ok(VERIFY_READ, src, n))
++		return -EFAULT;
++
++	pagefault_disable();
++	partial = __copy_from_user_inatomic(dst, src, n);
++	pagefault_enable();
++
++	/*
++	 * Didn't copy everything, drop the mmap_sem and do a faulting copy
++	 */
++	if (unlikely(partial)) {
++		up_read(&current->mm->mmap_sem);
++		partial = copy_from_user(dst, src, n);
++		down_read(&current->mm->mmap_sem);
++	}
++
++	return partial;
++}
+ /*
+  * Map an iov into an array of pages and offset/length tupples. With the
+  * partial_page structure, we can map several non-contiguous ranges into
+@@ -1671,23 +3048,37 @@
+ 		int, fd_out, loff_t __user *, off_out,
+ 		size_t, len, unsigned int, flags)
+ {
+-	long error;
++	long error = 0;
+ 	struct file *in, *out;
+ 	int fput_in, fput_out;
+ 
+ 	if (unlikely(!len))
+ 		return 0;
+ 
+-	error = -EBADF;
++	if (signal_pending(current)) {
++		printk(KERN_ERR "%s:%s:%d\n"
++					"signal pending returning EINTR.\n", 
++					__FUNCTION__, __FILE__, __LINE__);
++		return -EINTR;
++	}
++
+ 	in = fget_light(fd_in, &fput_in);
+ 	if (in) {
+ 		if (in->f_mode & FMODE_READ) {
+ 			out = fget_light(fd_out, &fput_out);
+ 			if (out) {
+ 				if (out->f_mode & FMODE_WRITE)
++#ifndef SPLICE_FAST
+ 					error = do_splice(in, off_in,
+ 							  out, off_out,
+ 							  len, flags);
++#else
++				{
++					error = do_splice_2(fd_in, in, off_in,
++							fd_out, out, off_out,
++							len, flags);
++				}
++#endif
+ 				fput_light(out, fput_out);
+ 			}
+ 		}
+@@ -1717,7 +3108,7 @@
+ 	pipe_lock(pipe);
+ 
+ 	while (!pipe->nrbufs) {
+-		if (signal_pending(current)) {
++		if (signal_pending(current)) { // exists in distro-kernel
+ 			ret = -ERESTARTSYS;
+ 			break;
+ 		}
+@@ -1764,7 +3155,7 @@
+ 			ret = -EAGAIN;
+ 			break;
+ 		}
+-		if (signal_pending(current)) {
++		if (signal_pending(current)) { // exists in distro-kernel
+ 			ret = -ERESTARTSYS;
+ 			break;
+ 		}

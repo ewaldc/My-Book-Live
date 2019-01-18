@@ -1,0 +1,961 @@
+diff -Naur a/drivers/leds/Makefile b/drivers/leds/Makefile
+--- a/drivers/leds/Makefile	2018-06-24 17:59:39.933077045 +0000
++++ b/drivers/leds/Makefile	2018-06-24 17:59:43.564541122 +0000
+@@ -6,6 +6,8 @@
+ obj-$(CONFIG_LEDS_TRIGGERS)		+= led-triggers.o
+ 
+ # LED Platform Drivers
++obj-$(CONFIG_LEDS_APOLLO3G)    += led-class-3g.o
++obj-$(CONFIG_LEDS_APOLLO3G)    += leds-apollo3g.o
+ obj-$(CONFIG_LEDS_88PM860X)		+= leds-88pm860x.o
+ obj-$(CONFIG_LEDS_AAT1290)		+= leds-aat1290.o
+ obj-$(CONFIG_LEDS_BCM6328)		+= leds-bcm6328.o
+diff -Naur a/drivers/leds/Kconfig b/drivers/leds/Kconfig
+--- a/drivers/leds/Kconfig	2017-07-27 22:08:24.000000000 +0000
++++ b/drivers/leds/Kconfig	2018-01-08 18:25:20.424161780 +0000
+@@ -31,6 +31,13 @@
+ 
+ comment "LED drivers"
+ 
++config LEDS_APOLLO3G
++	tristate "LED Support for Western Digital MyBookLive aka Apollo3G"
++	depends on NEW_LEDS
++	help
++	  This option enables support for on-chip LED drivers found on
++		Western Digital MyBookLive NAS aka Apollo3G.
++		
+ config LEDS_88PM860X
+ 	tristate "LED Support for Marvell 88PM860x PMIC"
+ 	depends on LEDS_CLASS
+diff -Naur a/drivers/leds/leds.h b/drivers/leds/leds.h
+--- a/drivers/leds/leds.h	2018-10-22 15:00:49.932585982 +0000
++++ b/drivers/leds/leds.h	2018-10-22 15:02:59.770654012 +0000
+@@ -16,17 +16,41 @@
+ #include <linux/rwsem.h>
+ #include <linux/leds.h>
+ 
+-static inline int led_get_brightness(struct led_classdev *led_cdev)
+-{
++#define  _3G_LED_OFF			0
++#define  _3G_LED_RED			1
++#define  _3G_LED_GREEN		2
++#define  _3G_LED_YELLOW	3
++#define  _3G_LED_BLUE		4
++#define  _3G_LED_MAGENTA 5
++#define  _3G_LED_CYAN    6
++#define  _3G_LED_ALL     7
++#define  _3G_LED_WHITE   7  /* save as _ALL */
++
++#define  _3G_BLINK_NO    0
++#define  _3G_BLINK_YES   1
++#define  _3G_BLINK_FOREVER	2
++
++static inline void led_set_color(struct led_classdev *led_cdev, enum led_brightness value) {
++  led_cdev->color = value;
++  if (!(led_cdev->flags & LED_SUSPENDED))
++  led_cdev->color_set(led_cdev, value);
++}
++
++static inline int led_get_color(struct led_classdev *led_cdev) {
++  return led_cdev->color;
++}
++static inline void led_set_blink(struct led_classdev *led_cdev, enum led_brightness value) {
++  led_cdev->blink = value;
++  led_cdev->blink_set_3g(led_cdev, value);
++}
++static inline int led_get_brightness(struct led_classdev *led_cdev){
+ 	return led_cdev->brightness;
+ }
+ 
+ void led_init_core(struct led_classdev *led_cdev);
+ void led_stop_software_blink(struct led_classdev *led_cdev);
+-void led_set_brightness_nopm(struct led_classdev *led_cdev,
+-				enum led_brightness value);
+-void led_set_brightness_nosleep(struct led_classdev *led_cdev,
+-				enum led_brightness value);
++void led_set_brightness_nopm(struct led_classdev *led_cdev, enum led_brightness value);
++void led_set_brightness_nosleep(struct led_classdev *led_cdev, enum led_brightness value);
+ 
+ extern struct rw_semaphore leds_list_lock;
+ extern struct list_head leds_list;
+
+diff -urN a/arch/powerpc/platforms/44x/apollo3g-gpio.c b/arch/powerpc/platforms/44x/apollo3g-gpio.c
+--- a/arch/powerpc/platforms/44x/apollo3g-gpio.c	1970-01-01 03:00:00.000000000 +0300
++++ b/arch/powerpc/platforms/44x/apollo3g-gpio.c	2015-03-29 21:02:00.000000000 +0300
+@@ -0,0 +1,75 @@
++/*
++ * (c) Copyright 2010 Western Digital Technologies, Inc.  All Rights Reserved.
++ *
++ * /sys drivers for GPIO pins
++
++    porting to kernel 3.2.64 by night_ghost@ykoctpa.ru
++
++ */
++
++#include <linux/init.h>
++#include <linux/module.h>
++#include <linux/platform_device.h>
++#include <linux/of_platform.h>
++
++
++/*
++ * resource data should be in dts file, but, for now ...
++ */
++static struct resource apollo3g_gpio1_resources[] = {
++	[0] = {
++		.start	= 0xe0000000,
++		.end	= 0xe0000003,
++		.flags  = IORESOURCE_MEM,
++	},
++};
++
++static struct platform_device apollo3g_gpio1_device = {
++        .name = "apollo3g_gpio1",
++        .id = 0,
++        .num_resources = ARRAY_SIZE(apollo3g_gpio1_resources),
++        .resource = apollo3g_gpio1_resources,
++};
++
++static struct resource apollo3g_gpio2_resources[] = {
++	[0] = {
++		.start	= 0xe1000000,
++		.end	= 0xe1000003,
++		.flags  = IORESOURCE_MEM,
++	},
++};
++
++static struct platform_device apollo3g_gpio2_device = {
++        .name = "apollo3g_gpio2",
++        .id = 0,
++        .num_resources = ARRAY_SIZE(apollo3g_gpio2_resources),
++        .resource = apollo3g_gpio2_resources,
++};
++/*
++static struct platform_device *apollo3g_devs[] __initdata = {
++        &apollo3g_gpio1_device,
++        &apollo3g_gpio2_device,
++};
++*/
++static const struct of_device_id apollo3g_gpio_match[] = {
++	{ .compatible = "amcc,apollo3g", },
++	{}
++};
++
++static struct platform_driver apollo3g_gpio_driver = {
++	.driver         = {
++                .name   = "apollo3g-gpio",
++                .owner  = THIS_MODULE,
++                .of_match_table = apollo3g_gpio_match,
++        },
++};
++
++static int __init apollo3g_gpio_init(void)
++{
++	printk(KERN_INFO "%s: GPIO 1 @ 0x%llx; GPIO 2 @ 0x%llx\n",
++	       __FUNCTION__, apollo3g_gpio1_device.resource[0].start,
++	       apollo3g_gpio2_device.resource[0].start);
++
++	return platform_driver_register(&apollo3g_gpio_driver);
++}
++device_initcall(apollo3g_gpio_init);
+diff -urN a/arch/powerpc/platforms/44x/Makefile b/arch/powerpc/platforms/44x/Makefile
+--- a/arch/powerpc/platforms/44x/Makefile	2015-04-29 11:22:30.000000000 +0300
++++ b/arch/powerpc/platforms/44x/Makefile	2015-05-02 16:41:11.589672421 +0300
+@@ -10,5 +10,7 @@
+ obj-$(CONFIG_XILINX_ML510) += virtex_ml510.o
+ obj-$(CONFIG_ISS4xx)	+= iss4xx.o
+ obj-$(CONFIG_CANYONLANDS)+= canyonlands.o
++obj-$(CONFIG_APOLLO3G)   += apollo3g-gpio.o
++obj-$(CONFIG_APOLLO3G)	+= apollo3g-usb.o
+ obj-$(CONFIG_CURRITUCK)	+= ppc476.o
+ obj-$(CONFIG_AKEBONO)	+= ppc476.o
+diff -urN a/drivers/leds/led-class-3g.c b/drivers/leds/led-class-3g.c
+--- a/drivers/leds/led-class-3g.c	1970-01-01 03:00:00.000000000 +0300
++++ b/drivers/leds/led-class-3g.c	2015-05-02 18:05:45.450268511 +0300
+@@ -0,0 +1,451 @@
++/*
++ * LED Class Core
++ *
++ * Copyright (C) 2005 John Lenz <lenz@cs.wisc.edu>
++ * Copyright (C) 2005-2007 Richard Purdie <rpurdie@openedhand.com>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++
++    porting to kernel 3.2.64 by night_ghost@ykoctpa.ru
++
++ */
++
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/list.h>
++#include <linux/spinlock.h>
++#include <linux/device.h>
++//#include <linux/sysdev.h>
++#include <linux/timer.h>
++#include <linux/err.h>
++#include <linux/ctype.h>
++#include <linux/leds.h>
++#include <linux/errno.h>
++#include "leds.h"
++
++#define   MAX_USERS          32
++#define   N_COLORS           4
++#define   N_EVENTS           3
++#define   USR_LEN            81
++#define   EVENT_LEN          81
++#define   INDEX_LEN          8
++
++/* LED users */
++#define   EV_NAS_SYSTEM      0    /* Overall system: NAS ready, booting, shutdown... */
++#define   EV_DISK_SMART      1    /* Disk SMART including temp., error lba, ...*/
++#define   EV_DISK_IO         2    /* Disk read/write error */
++#define   EV_RAID_CFG        3    /* RAID setup failure: assembling, formatting, rebuild ...*/
++#define   EV_FW_UPDATE       4    /* NAS firmware update */
++#define   EV_NETWORK         5    /* Network connectivity error */
++#define   EV_VM              6    /* Volume manager */
++
++char Led_user_arr[MAX_USERS][USR_LEN] = { "EV_NAS_SYSTEM", \
++                                          "EV_DISK_SMART", \
++                                          "EV_DISK_IO"   , \
++                                          "EV_RAID_CFG"  , \
++                                          "EV_FW_UPDATE" , \
++                                          "EV_NETWORK"   , \
++                                          "EV_VM",         \
++                                        };
++/* LED event types */
++#define   LED_STAT_OK        0    /* Happy user, normal operation */
++#define   LED_STAT_ERR       1    /* User error, needs led indication */
++#define   LED_STAT_IN_PROG   2    /* User doing something important, needs led indication */
++
++char *Led_ev_arr[] = { "LED_STAT_OK", "LED_STAT_ERR", "LED_STAT_IN_PROG" };
++
++char Color_map[MAX_USERS][N_EVENTS]  = { {'g','r','w'}, /* EV_NAS_SYSTEM */ \
++                                         {'g','y','w'}, /* EV_DISK_SMART */ \
++                                         {'g','r','w'}, /* EV_DISK_IO    */ \
++                                         {'g','r','w'}, /* EV_RAID_CFG   */ \
++                                         {'g','r','w'}, /* EV_FW_UPDATE  */ \
++                                         {'g','y','w'}, /* EV_NETWORK    */ \
++                                         {'g','r','w'}, /* EV_VM */ \
++                                       };
++
++char Blink_map[MAX_USERS][N_EVENTS]  = { {'n','n','n'}, /* EV_NAS_SYSTEM */ \
++                                         {'n','y','n'}, /* EV_DISK_SMART */ \
++                                         {'n','n','n'}, /* EV_DISK_IO    */ \
++                                         {'n','n','n'}, /* EV_RAID_CFG   */ \
++                                         {'n','n','n'}, /* EV_FW_UPDATE  */ \
++                                         {'n','y','n'}, /* EV_NETWORK    */ \
++                                         {'n','n','n'}, /* EV_VM */ \
++                                       };
++
++u32  Led_error_bits = 0;
++int  N_USERS = 7;    /* default number of users */
++
++static struct class *leds_class;
++
++static inline void led_update_color(struct led_classdev *led_cdev){
++  if (led_cdev->color_get)
++    led_cdev->color = led_cdev->color_get(led_cdev);
++}
++
++static ssize_t led_color_store(struct device *dev, struct device_attribute *attr, 
++	const char *buf, size_t size) {
++	struct led_classdev *led_cdev = dev_get_drvdata(dev);
++	unsigned long state = 9;
++	char user[USR_LEN], event[EVENT_LEN], index_str[INDEX_LEN], color;
++	int i = 0, j = 0, found = 0, tmp = 0, edit_policy = 0;
++	int reg_user = -1, reg_event = -1, reg_color = -1, val = -1;
++	const char * cptr = NULL;
++	long int index = -1;
++	char blink;
++	int reg_blink = 'n';
++			
++	cptr = &buf[0];
++
++	/* check for 'register' event */
++	// NB: Format of register event is 
++	// register:event,status,color
++	if (cptr[8] == ':')
++		if (!memcmp("register", cptr, 8)) {
++			edit_policy = 1;
++			cptr = &buf[9];
++		}
++
++	/* parse user name */ 
++	for( i = 0; i < (USR_LEN -1) && cptr[i]; i++ ) {
++		if (cptr[i] == ',') break;
++		user[i] = cptr[i];
++	}
++
++	/* null terminate user buf */
++	user[i] = '\0';
++	i++; /* skips the ',' delimiter */
++
++	for (j = 0; (j < EVENT_LEN -1) && cptr[i]; j++, i++) {
++		if ((cptr[i] == ',') || (cptr[i] == '\0') || (cptr[i] == '\n')) {
++			if (cptr[i] == ',') cptr = &cptr[i+1];
++			break;
++		}
++		event[j] = cptr[i];
++	}
++	/* null terminate event buf */
++	event[j] = '\0';
++	
++	/* if editing policy, parse the color */ 
++	if (edit_policy) {
++		if (cptr != NULL) {
++			reg_color = cptr[0];  /* r,g,b,y,w */
++			if (reg_color != 'r' && reg_color != 'g' && 
++					reg_color != 'b' && reg_color != 'y' && reg_color != 'w' ) {
++					reg_color = -1;  /* invalid color */               
++			}
++
++			/** TBD: Get the value of reg_blink from cptr */
++		}
++	} else { 
++		/* scan index for some users */
++		if (!strcmp(user, Led_user_arr[EV_DISK_SMART]) || !strcmp(user, Led_user_arr[EV_DISK_IO]) ) {
++			if( cptr != NULL ) {
++				for( i = 0; (i < INDEX_LEN -1) && cptr[i] ; i++ ) {
++					if( (cptr[i] == ',') || (cptr[i] == '\0') || (cptr[i] == '\n') ) break;
++					index_str[i] = cptr[i];
++				}
++			}
++		}
++	
++		/* null terminate index_str */
++		index_str[i] = '\0';
++		if (i) {
++			tmp = kstrtol(index_str, 10, &index);
++			if( !tmp && (index >= 0) ) {
++			/* TODO: insert code to fulfill req's. Currently not required */
++			/*printk(KERN_INFO "\nindex %ld\n", index);*/
++			}
++		}
++	} /* if( !edit_policy ) */
++
++	/* Validate user and event */
++	found = 0; 
++	for (i = 0; i < N_USERS; i++) {
++		if (!strcmp(Led_user_arr[i], user)) {
++			found = 1;
++			break;
++		}
++	}
++
++	if (found || edit_policy) {
++		reg_user = i;
++		/* new user registration */
++		if (! found) {
++			if( N_USERS == MAX_USERS ) /* only support up to 32 users */
++				return (ssize_t)size;
++			reg_user = N_USERS++;
++			strcpy(Led_user_arr[reg_user], user);
++		}
++		found = 0;
++		for (j = 0; j < N_EVENTS; j++) {
++			if( ! strcmp(Led_ev_arr[j], event) ) {
++				if (j == LED_STAT_ERR)
++					Led_error_bits |= (1 << i); /* register error for this user */
++				else if (j == LED_STAT_OK)
++					Led_error_bits &= ~(1 << i); /* clear error for this user */
++				found = 1;
++				reg_event = j;
++				break;
++			}
++		}
++	}
++
++	/* if this is a register event, do just that */
++	if (edit_policy) { /* valid event above and color */
++		if ((reg_event != -1) && (reg_color != -1)) {
++			Color_map[reg_user][reg_event] = reg_color;
++			/** TBD: Add support for registering blink with register: interface */
++			reg_blink = 'n';
++			Blink_map[reg_user][reg_event] = reg_blink;
++		}
++		/*printk( KERN_INFO "reg_user = %d, reg_event= %d, reg_color = %c\n", reg_user, reg_event, reg_color, reg_blink);*/
++		return (ssize_t)size;
++	}
++
++	/* Be nice ! support older led mechanism */ 
++	color = buf[0];
++	blink = 'x';
++
++	/* If valid user and event, retrieve color & blink map */
++	if( found ) {
++		/* if a canceling event and other error(s) existing, don't do anything */
++		if ((j == LED_STAT_OK) && (Led_error_bits != 0)) {}
++		else {
++			color = Color_map[i][j];
++			blink = Blink_map[i][j];
++		}
++		/*printk(KERN_INFO "\nUser= %s, event= %s, color %c, %08x\n", user, event, color, blink, Led_error_bits);*/
++	}       
++
++	switch (color) {
++		case 'r': /* red */
++			state = _3G_LED_RED;  //1
++			break;
++		case 'g': /* green */
++			state = _3G_LED_GREEN; //2
++			break;
++		case 'b': /* blue */
++			state = _3G_LED_BLUE; //4
++			break;
++		case 'y': /* yellow */
++			state = _3G_LED_YELLOW; //3
++			break;
++		case 'w': /* white */
++			state = _3G_LED_WHITE; //7
++			break;
++		case 'o': /* off */
++			state = _3G_LED_OFF; //0
++			break;
++		case 'm': /* magenta */
++			state = _3G_LED_MAGENTA; //5
++			break;
++		case 'c': /* cyan */
++			state = _3G_LED_CYAN; //6
++			break;
++		default:
++			state = -1;
++			break;
++	}
++
++	/** do nothing if no color change is required */
++	if( state == -1 ) return (ssize_t)size;
++
++	// printk(KERN_DEBUG "Calling led_set_color with value %c, blink is %c\n", color, blink);
++	led_set_color( led_cdev, state );
++
++	/** blink the led */
++	//	printk(KERN_DEBUG "Calling led_set_blink with value %c\n", blink);
++
++	switch( blink ) {
++		case 'y':	/** yes */
++			val = 1;
++			break;
++		case 'n':	/** no */
++			val = 0;
++			break;
++		case 'f':	/** forced */
++			val = 2;
++			break;
++		default:
++			break;
++	}
++
++	if (val >= 0)	led_set_blink( led_cdev, val);
++	return (ssize_t)size;
++}
++
++static ssize_t led_color_show(struct device *dev, struct device_attribute *attr, char *buf) {
++	struct led_classdev *led_cdev = dev_get_drvdata(dev);
++	char *colorStr[] = {"off", "red", "green", "yellow", "blue", "magenta", "cyan", "white"};
++	/* no lock needed for this */
++	led_update_color(led_cdev);
++	return sprintf(buf, "%s\n", colorStr[led_cdev->color]);
++}
++
++static ssize_t led_blink_show(struct device *dev, struct device_attribute *attr, char *buf) {
++	//char *blinkStr = "no";
++	struct led_classdev  *led_cdev = dev_get_drvdata(dev);
++	
++	if (led_cdev->blink == 1) return sprintf(buf, "%s\n", "yes");
++	return sprintf(buf, "%s\n", "no"); //sprintf(buf, "%s\n", blinkStr);       
++}
++
++static ssize_t led_blink_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size) {
++	struct led_classdev *led_cdev = dev_get_drvdata(dev);
++	int val = (buf[0] == 'y');
++//	if (buf[0] == 'y') val = 1;
++//	else if (buf[0] == 'n') val = 0;
++	if (buf[0] == 'f') val = 2;
++	led_set_blink(led_cdev, val);
++	return (ssize_t)size;
++}
++
++static ssize_t led_max_brightness_show(struct device *dev, struct device_attribute *attr, char *buf) {
++	struct led_classdev *led_cdev = dev_get_drvdata(dev);
++	return sprintf(buf, "%u\n", led_cdev->max_brightness);
++}
++
++/*static DEVICE_ATTR(brightness, 0644, led_brightness_show, led_brightness_store);*/
++static DEVICE_ATTR(color, 0644, led_color_show, led_color_store);
++static DEVICE_ATTR(blink, 0644, led_blink_show, led_blink_store);
++static DEVICE_ATTR(max_brightness, 0444, led_max_brightness_show, NULL);
++
++#ifdef CONFIG_LEDS_TRIGGERS
++static DEVICE_ATTR(trigger, 0644, led_trigger_show, led_trigger_store);
++#endif
++
++/**
++ * led_classdev_suspend - suspend an led_classdev.
++ * @led_cdev: the led_classdev to suspend.
++ */
++void led_classdev_suspend(struct led_classdev *led_cdev){
++	led_cdev->flags |= LED_SUSPENDED;
++	led_cdev->color_set(led_cdev, 0);
++}
++EXPORT_SYMBOL_GPL(led_classdev_suspend);
++
++/**
++ * led_classdev_resume - resume an led_classdev.
++ * @led_cdev: the led_classdev to resume.
++ */
++void led_classdev_resume(struct led_classdev *led_cdev){
++	led_cdev->color_set(led_cdev, led_cdev->color);
++	led_cdev->flags &= ~LED_SUSPENDED;
++}
++EXPORT_SYMBOL_GPL(led_classdev_resume);
++
++static int led_suspend(struct device *dev, pm_message_t state) {
++    struct led_classdev *led_cdev = dev_get_drvdata(dev);
++
++    if (led_cdev->flags & LED_CORE_SUSPENDRESUME) led_classdev_suspend(led_cdev);
++    return 0;
++}
++
++static int led_resume(struct device *dev) {
++    struct led_classdev *led_cdev = dev_get_drvdata(dev);
++    if (led_cdev->flags & LED_CORE_SUSPENDRESUME) led_classdev_resume(led_cdev);
++    return 0;
++}
++
++/**
++ * led_classdev_register - register a new object of led_classdev class.
++ * @parent: The device to register.
++ * @led_cdev: the led_classdev structure for this device.
++ */
++int led_classdev_register(struct device *parent, struct led_classdev *led_cdev){
++    int rc;
++
++    led_cdev->dev = device_create(leds_class, parent, 0, led_cdev, "%s", led_cdev->name);
++    if (IS_ERR(led_cdev->dev)) return PTR_ERR(led_cdev->dev);
++
++    /* register the attributes */
++    rc = device_create_file(led_cdev->dev, &dev_attr_color);
++    if (rc) goto err_out;
++
++    rc = device_create_file(led_cdev->dev, &dev_attr_blink);
++    if (rc) goto err_out;
++
++#ifdef CONFIG_LEDS_TRIGGERS
++    init_rwsem(&led_cdev->trigger_lock);
++#endif
++    /* add to the list of leds */
++    down_write(&leds_list_lock);
++    list_add_tail(&led_cdev->node, &leds_list);
++    up_write(&leds_list_lock);
++
++    if (!led_cdev->max_brightness)
++      led_cdev->max_brightness = LED_FULL;
++
++    rc = device_create_file(led_cdev->dev, &dev_attr_max_brightness);
++    if (rc) goto err_out_attr_max;
++
++    led_update_color(led_cdev);
++
++#ifdef CONFIG_LEDS_TRIGGERS
++    rc = device_create_file(led_cdev->dev, &dev_attr_trigger);
++    if (rc) goto err_out_led_list;
++    led_trigger_set_default(led_cdev);
++#endif
++
++    printk(KERN_INFO "Registered led device: %s\n", led_cdev->name);
++    return 0;
++
++#ifdef CONFIG_LEDS_TRIGGERS
++err_out_led_list:
++    device_remove_file(led_cdev->dev, &dev_attr_max_brightness);
++#endif
++err_out_attr_max:
++    device_remove_file(led_cdev->dev, &dev_attr_color);
++    list_del(&led_cdev->node);
++err_out:
++    device_unregister(led_cdev->dev);
++    return rc;
++}
++EXPORT_SYMBOL_GPL(led_classdev_register);
++
++/**
++ * led_classdev_unregister - unregisters a object of led_properties class.
++ * @led_cdev: the led device to unregister
++ *
++ * Unregisters a previously registered via led_classdev_register object.
++ */
++void led_classdev_unregister(struct led_classdev *led_cdev) {
++	device_remove_file(led_cdev->dev, &dev_attr_max_brightness);
++	device_remove_file(led_cdev->dev, &dev_attr_color);
++#ifdef CONFIG_LEDS_TRIGGERS
++	device_remove_file(led_cdev->dev, &dev_attr_trigger);
++	down_write(&led_cdev->trigger_lock);
++	if (led_cdev->trigger)
++		led_trigger_set(led_cdev, NULL);
++	up_write(&led_cdev->trigger_lock);
++#endif
++
++	device_unregister(led_cdev->dev);
++	down_write(&leds_list_lock);
++	list_del(&led_cdev->node);
++	up_write(&leds_list_lock);
++}
++EXPORT_SYMBOL_GPL(led_classdev_unregister);
++
++static int __init leds_init(void) {
++	leds_class = class_create(THIS_MODULE, "leds");
++	if (IS_ERR(leds_class))	return PTR_ERR(leds_class);
++	leds_class->suspend = led_suspend;
++	leds_class->resume = led_resume;
++	printk(KERN_DEBUG "Apollo3G Led Class Initialized\n");
++	return 0;
++}
++
++static void __exit leds_exit(void) {
++	class_destroy(leds_class);
++}
++
++subsys_initcall(leds_init);
++module_exit(leds_exit);
++
++MODULE_AUTHOR("John Lenz, Richard Purdie");
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("LED Class Interface");
+\ No newline at end of file
+diff -urN a/drivers/leds/leds-apollo3g.c b/drivers/leds/leds-apollo3g.c
+--- a/drivers/leds/leds-apollo3g.c	1970-01-01 03:00:00.000000000 +0300
++++ b/drivers/leds/leds-apollo3g.c	2015-05-02 17:47:28.570474857 +0300
+@@ -0,0 +1,272 @@
++/* LED Platform driver for Apollo3G board.
++ * © 2010 Western Digital Technologies, Inc. All rights reserved. */
++
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/platform_device.h>
++#include <linux/completion.h>
++#include <linux/leds.h>
++#include <linux/delay.h>
++#include <asm/io.h>
++#include <linux/of.h>
++#include <linux/of_platform.h>
++#include <linux/ioport.h>
++#include <linux/spinlock.h>
++#include <linux/types.h>
++
++#include <linux/suspend.h>
++#include <linux/kthread.h>
++#include <linux/sched.h>
++#include <linux/wait.h>
++#include <linux/signal.h>
++#include <linux/freezer.h>
++
++#include "leds.h"
++
++/*
++#define  _3G_BIT_LED_RED		    0x10
++#define  _3G_BIT_LED_GREEN      0x20
++#define  _3G_BIT_LED_BLUE       0x40
++#define  _3G_BIT_LED_YELLOW     (_3G_BIT_LED_GREEN | _3G_BIT_LED_RED)
++#define  _3G_BIT_LED_CYAN				(_3G_BIT_LED_GREEN | _3G_BIT_LED_BLUE)
++*/
++#define  _3G_BIT_LED_ALL        0x70
++#define  _3G_BIT_LED_OFF        0x00
++
++#define  HDD_BLINK_RATE 250
++
++static DEFINE_SPINLOCK(led_lock);
++struct task_struct * threadptr;
++
++wait_queue_head_t  ts_wait;
++int blink_flag = 0;
++
++void __iomem *led_port = NULL;
++
++typedef struct led_state_s {
++   int cur_color;
++   int cur_action;
++} led_state_t;
++
++led_state_t led_state = { 
++	.cur_color  = _3G_LED_YELLOW,
++  .cur_action = _3G_BLINK_NO
++};  
++
++EXPORT_SYMBOL(led_port);
++
++/* read value from 3g led_port */
++u8 __always_inline read_3gled (void) {
++   return readb(led_port); 
++}
++
++/* read-modify-write 3g led port */
++u8 inline write_3gled(u8 mask, u8 value) {
++  u8 regval;
++
++  regval = read_3gled();
++  regval &= ~mask;
++  regval |= (value & mask); 
++  writeb(regval, led_port);
++  return regval;
++}
++
++/* return 3g led color */
++static __always_inline enum led_brightness a3g_led_get(struct led_classdev *led_cdev) {
++//   unsigned char readval;
++   return led_state.cur_color;
++}
++
++/* set 3g led color */
++static __always_inline void a3g_led_set(struct led_classdev *led_cdev, enum led_brightness value) {
++   unsigned long flags;
++
++   spin_lock_irqsave(&led_lock, flags);
++	 write_3gled(_3G_BIT_LED_ALL, value<<4); 
++/*
++   switch (value) {
++      case _3G_LED_RED:
++         write_3gled( _3G_BIT_LED_ALL, _3G_BIT_LED_RED);  
++         break;
++      case _3G_LED_GREEN:
++         write_3gled( _3G_BIT_LED_ALL, _3G_BIT_LED_GREEN);  
++         break;
++      case _3G_LED_BLUE:
++         write_3gled( _3G_BIT_LED_ALL, _3G_BIT_LED_BLUE);  
++         break;
++      case _3G_LED_OFF:
++         write_3gled( _3G_BIT_LED_ALL, _3G_BIT_LED_OFF);  
++         break;
++      case _3G_LED_ALL:
++         write_3gled( _3G_BIT_LED_ALL, _3G_BIT_LED_ALL);  
++         break;
++      case _3G_LED_YELLOW:
++         write_3gled(_3G_BIT_LED_ALL, _3G_BIT_LED_YELLOW);  
++         break;
++      default:
++         break; // should never be here
++   }
++*/
++   led_state.cur_color = value; 
++   spin_unlock_irqrestore(&led_lock, flags);
++}
++
++/* set 3g led blinking */
++static int a3g_led_blink(struct led_classdev *led_cdev, int value) {
++   /* if forced blink, don't set blink_flag */
++   if (blink_flag == _3G_BLINK_FOREVER) return 0;
++   
++   /*spin_lock_irqsave(&led_lock, flags);*/
++   /* user wants to blink led */
++   blink_flag = value;
++	 if (value == _3G_BLINK_YES) wake_up(&ts_wait);
++   else if (value == _3G_BLINK_FOREVER) wake_up(&ts_wait);
++   // printk(KERN_DEBUG "%s: Got blink signal - input blink value %d, blink_flag %d\n", __func__, value, blink_flag);
++
++  /* spin_unlock_irqrestore(&led_lock, flags);*/
++   return 0;
++}
++
++/* flag = blink or not
++ * color = blinking color */
++void signal_hdd_led(int flag, int color) {
++	/* if forced blinking was set, keep it blinking forever */
++	if (blink_flag == _3G_BLINK_FOREVER) return;
++	// if hdd error, set led to red (and keep it red)
++	if (color == _3G_LED_RED) {
++		a3g_led_set(NULL, _3G_LED_RED);
++		return;
++	}
++	// at this point, hdd color is _3G_LED_GREEN
++	if (flag /* blink == yes */ && led_state.cur_color != _3G_LED_RED
++#if 0
++	(led_state.cur_color != _3G_LED_WHITE)  && /* don't touch fw update led */
++	(led_state.cur_color != _3G_LED_RED)    && /* don't touch system error led */
++	!((led_state.cur_color == _3G_LED_BLUE) && (led_state.cur_action == _3G_BLINK_YES)) && /* leave identity alone */
++	(color != _3G_LED_RED)
++#endif
++	) {
++		if (led_state.cur_color != _3G_LED_GREEN) a3g_led_set(NULL, _3G_LED_GREEN);
++		blink_flag = _3G_BLINK_YES;
++		wake_up(&ts_wait);
++	}
++	else //if (!flag /* blink == no */) 
++		blink_flag = _3G_BLINK_NO;
++
++	//printk(KERN_DEBUG "%s: Got HDD signal - cur_color %d, color %d, blink %d, blink_flag %d\n", __func__, led_state.cur_color, color, flag, blink_flag);
++}
++
++static struct led_classdev a3g_led_dev = { 
++	.name           = "a3g_led",
++	.color_set      = a3g_led_set,
++	.color_get      = a3g_led_get,
++	.blink_set_3g   = a3g_led_blink,
++};
++
++static int a3g_led_probe(struct platform_device *pdev) {
++  return 0;      /* Not used */
++}
++
++static int a3g_led_remove(struct platform_device *pdev){
++	led_classdev_unregister(&a3g_led_dev);
++	if (led_port){
++		iounmap(led_port);
++		led_port = NULL;
++	}
++	return 0;
++}
++
++static struct platform_driver a3g_led_driver = {
++	.probe      = a3g_led_probe, 
++	.remove     = a3g_led_remove,
++	.driver     = {
++		.name = "a3g-leds",
++		.owner = THIS_MODULE,
++	},
++};
++
++static struct resource a3g_res = {
++	.name = "cs1",
++	.start = 0x4e0000000ULL,
++	.end = 0x4e0000300ULL,
++	.flags = IORESOURCE_MEM,  /*.flags = IORESOURCE_IO,*/
++};
++
++static int a3g_led_blink_thread (void * data) {
++	unsigned char readval, color;
++	struct task_struct * tsk = current;
++	struct sched_param param = { .sched_priority = 1};
++
++	init_waitqueue_head(&ts_wait);
++
++	sched_setscheduler(tsk, SCHED_FIFO, &param);
++	set_freezable();
++
++  while (!kthread_should_stop()) {
++		led_state.cur_action = _3G_BLINK_NO;
++		/* always set current color before blinking */
++		a3g_led_set(NULL, led_state.cur_color);
++		wait_event_freezable_timeout(ts_wait, blink_flag || kthread_should_stop(), MAX_SCHEDULE_TIMEOUT); 
++		if (led_port) {
++			readval = readb(led_port);
++			color = readval & _3G_BIT_LED_ALL;
++			write_3gled( _3G_BIT_LED_ALL, _3G_BIT_LED_OFF);  
++			msleep(HDD_BLINK_RATE);
++			write_3gled( _3G_BIT_LED_ALL, color);  
++			msleep(HDD_BLINK_RATE);
++			led_state.cur_action = _3G_BLINK_YES;
++		}
++  }
++  return 0;
++}
++
++static int __init a3g_led_init(void) {
++   resource_size_t res_size;
++   struct resource *phys_res = &a3g_res;
++   int retval;
++
++   res_size = resource_size(phys_res); 
++   if( !request_mem_region(phys_res->start, res_size, phys_res->name) ) {
++      printk(KERN_DEBUG "**** error request_mem_region()\n");
++      return -1;
++   }
++       
++   led_port = ioremap(phys_res->start, res_size);
++   if (led_port == NULL) {
++      release_mem_region(phys_res->start, res_size);
++      printk(KERN_DEBUG "*** Error ioremap()");
++      return -1;
++   }
++   else {
++      retval = led_classdev_register(NULL, &a3g_led_dev);
++      if (retval) {
++        led_classdev_unregister(&a3g_led_dev);
++        iounmap(led_port);
++        led_port = NULL;     
++        release_mem_region(phys_res->start, res_size);
++        return -1;
++      }
++      threadptr = kthread_run( a3g_led_blink_thread, NULL, "a3gblink_t");
++      
++      return platform_driver_register(&a3g_led_driver);
++   }
++}
++
++static void __exit a3g_led_exit(void) {
++	platform_driver_unregister(&a3g_led_driver);
++	if (led_port){
++		 led_classdev_unregister(&a3g_led_dev);
++		 iounmap(led_port);
++		 led_port = NULL;
++		 if (threadptr) kthread_stop(threadptr);
++		 release_mem_region(a3g_res.start, (a3g_res.end - a3g_res.start + 1));
++	}
++}
++
++module_init(a3g_led_init);
++module_exit(a3g_led_exit);
++
++MODULE_AUTHOR("Hai Le <hai.le@wdc.com>");
++MODULE_DESCRIPTION("Apollo3G LED driver");
++MODULE_LICENSE("GPL");
+\ No newline at end of file
+diff -Naur a/drivers/leds/leds.h b/drivers/leds/leds.h
+--- a/include/linux/leds.h	2017-06-17 04:43:47.000000000 +0000
++++ b/include/linux/leds.h	2017-06-12 17:27:43.360675924 +0000
+@@ -37,6 +48,9 @@
+ 	enum led_brightness	 max_brightness;
+ 	int			 flags;
+ 
++	int			 color;
++	int			 blink;
++
+ 	/* Lower 16 bits reflect status */
+ #define LED_SUSPENDED		(1 << 0)
+ #define LED_UNREGISTERING	(1 << 1)
+@@ -53,18 +67,22 @@
+ #define LED_HW_PLUGGABLE	(1 << 25)
+ #define LED_PANIC_INDICATOR	(1 << 26)
+ 
++#ifdef CONFIG_APOLLO3G
++	void (*color_set)(struct led_classdev *led_cdev, enum led_brightness color);
++	/* Get LED brightness level */
++	enum led_brightness (*color_get)(struct led_classdev *led_cdev);
++#endif
++
+ 	/* Set LED brightness level
+ 	 * Must not sleep. Use brightness_set_blocking for drivers
+ 	 * that can sleep while setting brightness.
+ 	 */
+-	void		(*brightness_set)(struct led_classdev *led_cdev,
+-					  enum led_brightness brightness);
++	void (*brightness_set)(struct led_classdev *led_cdev, enum led_brightness brightness);
+ 	/*
+ 	 * Set LED brightness level immediately - it can block the caller for
+ 	 * the time required for accessing a LED device register.
+ 	 */
+-	int (*brightness_set_blocking)(struct led_classdev *led_cdev,
+-				       enum led_brightness brightness);
++	int (*brightness_set_blocking)(struct led_classdev *led_cdev, enum led_brightness brightness);
+ 	/* Get LED brightness level */
+ 	enum led_brightness (*brightness_get)(struct led_classdev *led_cdev);
+ 
+@@ -76,10 +94,15 @@
+ 	 * Deactivate blinking again when the brightness is set to LED_OFF
+ 	 * via the brightness_set() callback.
+ 	 */
+-	int		(*blink_set)(struct led_classdev *led_cdev,
++	int	(*blink_set)(struct led_classdev *led_cdev,
+ 				     unsigned long *delay_on,
+ 				     unsigned long *delay_off);
+ 
++#ifdef CONFIG_APOLLO3G
++	int (*blink_set_3g)(struct led_classdev *led_cdev, int value );
++	int (*blink_get_3g)(struct led_classdev *led_cdev);
++#endif
++
+ 	struct device		*dev;
+ 	const struct attribute_group	**groups;
+ 

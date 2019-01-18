@@ -1,0 +1,369 @@
+diff -Naur a/drivers/crypto/amcc/crypto4xx_alg.c b/drivers/crypto/amcc/crypto4xx_alg.c
+--- a/drivers/crypto/amcc/crypto4xx_alg.c
++++ b/drivers/crypto/amcc/crypto4xx_alg.c
+@@ -27,6 +27,7 @@
+ #include <linux/dma-mapping.h>
+ #include <crypto/algapi.h>
+ #include <crypto/aes.h>
++#include <crypto/ctr.h>
+ #include <crypto/sha.h>
+ #include "crypto4xx_reg_def.h"
+ #include "crypto4xx_sa.h"
+@@ -80,8 +81,8 @@ int crypto4xx_encrypt(struct ablkcipher_
+ 	ctx->pd_ctl = 0x1;
+ 
+ 	return crypto4xx_build_pd(&req->base, ctx, req->src, req->dst,
+-				  req->nbytes, req->info,
+-				  get_dynamic_sa_iv_size(ctx));
++		req->nbytes, req->info,
++		crypto_ablkcipher_ivsize(crypto_ablkcipher_reqtfm(req)));
+ }
+ 
+ int crypto4xx_decrypt(struct ablkcipher_request *req)
+@@ -94,8 +95,8 @@ int crypto4xx_decrypt(struct ablkcipher_
+ 	ctx->pd_ctl = 1;
+ 
+ 	return crypto4xx_build_pd(&req->base, ctx, req->src, req->dst,
+-				  req->nbytes, req->info,
+-				  get_dynamic_sa_iv_size(ctx));
++		  req->nbytes, req->info,
++	          crypto_ablkcipher_ivsize(crypto_ablkcipher_reqtfm(req)));
+ }
+ 
+ /**
+@@ -174,6 +175,45 @@ int crypto4xx_setkey_aes_cbc(struct cryp
+ 				    CRYPTO_FEEDBACK_MODE_NO_FB);
+ }
+ 
++int crypto4xx_setkey_aes_ecb(struct crypto_ablkcipher *cipher,
++			     const u8 *key, unsigned int keylen)
++{
++	return crypto4xx_setkey_aes(cipher, key, keylen, CRYPTO_MODE_ECB,
++				    CRYPTO_FEEDBACK_MODE_NO_FB);
++}
++
++int crypto4xx_setkey_aes_ctr(struct crypto_ablkcipher *cipher,
++			     const u8 *key, unsigned int keylen)
++{
++	return crypto4xx_setkey_aes(cipher, key, keylen, CRYPTO_MODE_AES_CTR,
++				    CRYPTO_FEEDBACK_MODE_NO_FB);
++}
++
++int crypto4xx_setkey_rfc3686_aes_ctr(struct crypto_ablkcipher *cipher,
++                             const u8 *key, unsigned int keylen)
++{
++	struct crypto_tfm *tfm = crypto_ablkcipher_tfm(cipher);
++	struct crypto4xx_ctx *ctx = crypto_tfm_ctx(tfm);
++	int rc;
++	u32 cnt = 1;
++
++	keylen -= CTR_RFC3686_NONCE_SIZE;
++
++	rc = crypto4xx_setkey_aes(cipher, key, keylen, CRYPTO_MODE_AES_CTR,
++				    CRYPTO_FEEDBACK_MODE_NO_FB);
++	if (rc == 0) {
++		ctx->is_aes_ctr = 1;
++
++		crypto4xx_memcpy_le(ctx->state_record, key + keylen,
++				    CTR_RFC3686_NONCE_SIZE);
++		crypto4xx_memcpy_le(ctx->state_record + CTR_RFC3686_NONCE_SIZE +
++				    CTR_RFC3686_IV_SIZE, (void *)&cnt,
++				    CTR_RFC3686_NONCE_SIZE);
++	}
++
++	return rc;
++}
++
+ /**
+  * HASH SHA1 Functions
+  */
+diff -Naur a/drivers/crypto/amcc/crypto4xx_core.c b/drivers/crypto/amcc/crypto4xx_core.c
+--- a/drivers/crypto/amcc/crypto4xx_core.c
++++ b/drivers/crypto/amcc/crypto4xx_core.c
+@@ -36,6 +36,7 @@
+ #include <asm/dcr-regs.h>
+ #include <asm/cacheflush.h>
+ #include <crypto/aes.h>
++#include <crypto/ctr.h>
+ #include <crypto/sha.h>
+ #include "crypto4xx_reg_def.h"
+ #include "crypto4xx_core.h"
+@@ -120,9 +121,12 @@ static void crypto4xx_hw_init(struct cry
+ 	/*clear all pending interrupt*/
+ 	writel(PPC4XX_INTERRUPT_CLR, dev->ce_base + CRYPTO4XX_INT_CLR);
+ 	writel(PPC4XX_INT_DESCR_CNT, dev->ce_base + CRYPTO4XX_INT_DESCR_CNT);
+-	writel(PPC4XX_INT_DESCR_CNT, dev->ce_base + CRYPTO4XX_INT_DESCR_CNT);
+-	writel(PPC4XX_INT_CFG, dev->ce_base + CRYPTO4XX_INT_CFG);
+-	writel(PPC4XX_PD_DONE_INT, dev->ce_base + CRYPTO4XX_INT_EN);
++
++        writel(PPC4XX_INT_TIMEOUT_CNT_REVB << 10,
++	       dev->ce_base + CRYPTO4XX_INT_TIMEOUT_CNT);
++	/* For RevB, 460EX and 460ExR Rev B */
++	writel(PPC4XX_PD_DONE_INT | PPC4XX_TMO_ERR_INT,
++		dev->ce_base + CRYPTO4XX_INT_EN);
+ }
+ 
+ int crypto4xx_alloc_sa(struct crypto4xx_ctx *ctx, u32 size)
+@@ -159,6 +163,8 @@ void crypto4xx_free_sa(struct crypto4xx_
+ 
+ 	ctx->sa_in_dma_addr = 0;
+ 	ctx->sa_out_dma_addr = 0;
++	ctx->sa_in = NULL;
++	ctx->sa_out = NULL;
+ 	ctx->sa_len = 0;
+ }
+ 
+@@ -167,7 +173,7 @@ u32 crypto4xx_alloc_state_record(struct
+ 	ctx->state_record = dma_alloc_coherent(ctx->dev->core_dev->device,
+ 				sizeof(struct sa_state_record),
+ 				&ctx->state_record_dma_addr, GFP_ATOMIC);
+-	if (!ctx->state_record_dma_addr)
++	if (!ctx->state_record_dma_addr || !ctx->state_record)
+ 		return -ENOMEM;
+ 	memset(ctx->state_record, 0, sizeof(struct sa_state_record));
+ 
+@@ -181,6 +187,7 @@ void crypto4xx_free_state_record(struct
+ 				  sizeof(struct sa_state_record),
+ 				  ctx->state_record,
+ 				  ctx->state_record_dma_addr);
++	ctx->state_record = NULL;
+ 	ctx->state_record_dma_addr = 0;
+ }
+ 
+@@ -777,7 +784,6 @@ u32 crypto4xx_build_pd(struct crypto_asy
+ 	unsigned long flags;
+ 	struct pd_uinfo *pd_uinfo = NULL;
+ 	unsigned int nbytes = datalen, idx;
+-	unsigned int ivlen = 0;
+ 	u32 gd_idx = 0;
+ 
+ 	/* figure how many gd is needed */
+@@ -843,8 +849,8 @@ u32 crypto4xx_build_pd(struct crypto_asy
+ 	pd_uinfo->num_gd = num_gd;
+ 	pd_uinfo->num_sd = num_sd;
+ 
++	//writel(0, ctx->dev->ce_base + CRYPTO4XX_SA_UADDR);
+ 	if (iv_len || ctx->is_hash) {
+-		ivlen = iv_len;
+ 		pd->sa = pd_uinfo->sa_pa;
+ 		sa = (struct dynamic_sa_ctl *) pd_uinfo->sa_va;
+ 		if (ctx->direction == DIR_INBOUND)
+@@ -855,8 +861,28 @@ u32 crypto4xx_build_pd(struct crypto_asy
+ 		memcpy((void *) sa + ctx->offset_to_sr_ptr,
+ 			&pd_uinfo->sr_pa, 4);
+ 
+-		if (iv_len)
+-			crypto4xx_memcpy_le(pd_uinfo->sr_va, iv, iv_len);
++		if (iv_len) {
++                        if (ctx->is_aes_ctr) {
++				/* First the nonce */
++				memcpy(pd_uinfo->sr_va, ctx->state_record,
++					CTR_RFC3686_NONCE_SIZE);
++				/*
++				 * Copy the IV that is passed through
++				 * each operation
++				 */
++				crypto4xx_memcpy_le(pd_uinfo->sr_va +
++					CTR_RFC3686_NONCE_SIZE, iv, iv_len);
++                        } else {
++				crypto4xx_memcpy_le(pd_uinfo->sr_va, iv,
++					iv_len);
++			}
++		}
++		if (ctx->is_aes_ctr) {
++			u32 seq = 1;
++			/* For GCM and CTR(AES) algs adding the counter value */
++			crypto4xx_memcpy_le(pd_uinfo->sr_va + 12,
++				(void *)&seq, 4);
++		}
+ 	} else {
+ 		if (ctx->direction == DIR_INBOUND) {
+ 			pd->sa = ctx->sa_in_dma_addr;
+@@ -964,6 +990,8 @@ u32 crypto4xx_build_pd(struct crypto_asy
+ 	sa->sa_command_1.bf.hash_crypto_offset = 0;
+ 	pd->pd_ctl.w = ctx->pd_ctl;
+ 	pd->pd_ctl_len.w = 0x00400000 | (ctx->bypass << 24) | datalen;
++	if (ctx->next_hdr)
++		pd->pd_ctl.bf.next_hdr = ctx->next_hdr;
+ 	pd_uinfo->state = PD_ENTRY_INUSE;
+ 	wmb();
+ 	/* write any value to push engine to read a pd */
+@@ -1075,7 +1103,8 @@ static void crypto4xx_bh_tasklet_cb(unsi
+ 		tail = core_dev->dev->pdr_tail;
+ 		pd_uinfo = core_dev->dev->pdr_uinfo +
+ 			sizeof(struct pd_uinfo)*tail;
+-		pd =  core_dev->dev->pdr + sizeof(struct ce_pd) * tail;
++		pd = core_dev->dev->pdr + sizeof(struct ce_pd) * tail;
++
+ 		if ((pd_uinfo->state == PD_ENTRY_INUSE) &&
+ 				   pd->pd_ctl.bf.pe_done &&
+ 				   !pd->pd_ctl.bf.host_ready) {
+@@ -1097,12 +1126,22 @@ static irqreturn_t crypto4xx_ce_interrup
+ {
+ 	struct device *dev = (struct device *)data;
+ 	struct crypto4xx_core_device *core_dev = dev_get_drvdata(dev);
++	u32 int_status, dev_status;
+ 
+ 	if (!core_dev->dev->ce_base)
+ 		return 0;
+ 
+-	writel(PPC4XX_INTERRUPT_CLR,
+-	       core_dev->dev->ce_base + CRYPTO4XX_INT_CLR);
++//	writel(PPC4XX_INTERRUPT_CLR,
++//	       core_dev->dev->ce_base + CRYPTO4XX_INT_CLR);
++
++//	int_status = readl(core_dev->dev->ce_base + CRYPTO4XX_INT_UNMASK_STAT);
++//	printk("Interrupt status = 0x%08x\n", int_status);
++
++//	dev_status = readl(core_dev->dev->ce_base + CRYPTO4XX_DEVICE_INFO);
++//	printk("dev status = 0x%08x\n", dev_status);
++	writel(PPC4XX_INTERRUPT_CLR_REVB,
++		core_dev->dev->ce_base + CRYPTO4XX_INT_CLR);
++
+ 	tasklet_schedule(&core_dev->tasklet);
+ 
+ 	return IRQ_HANDLED;
+@@ -1135,6 +1174,69 @@ struct crypto4xx_alg_common crypto4xx_al
+ 			}
+ 		}
+ 	}},
++	{ .type = CRYPTO_ALG_TYPE_ABLKCIPHER, .u.cipher = {
++		.cra_name 	= "ctr(aes)",
++		.cra_driver_name = "ctr-aes-ppc4xx",
++		.cra_priority 	= CRYPTO4XX_CRYPTO_PRIORITY,
++		.cra_flags 	= CRYPTO_ALG_TYPE_ABLKCIPHER | CRYPTO_ALG_ASYNC,
++		.cra_blocksize 	= AES_BLOCK_SIZE,
++		.cra_ctxsize 	= sizeof(struct crypto4xx_ctx),
++		.cra_type 	= &crypto_ablkcipher_type,
++		.cra_init	= crypto4xx_alg_init,
++		.cra_exit	= crypto4xx_alg_exit,
++		.cra_module 	= THIS_MODULE,
++		.cra_u 		= {
++			.ablkcipher = {
++				.min_keysize 	= AES_MIN_KEY_SIZE,
++				.max_keysize 	= AES_MAX_KEY_SIZE,
++				.setkey 	= crypto4xx_setkey_aes_ctr,
++				.encrypt 	= crypto4xx_encrypt,
++				.decrypt 	= crypto4xx_decrypt,
++			},
++		},
++	}},
++	{ .type = CRYPTO_ALG_TYPE_ABLKCIPHER, .u.cipher = {
++		.cra_name 	= "ecb(aes)",
++		.cra_driver_name = "ecb-aes-ppc4xx",
++		.cra_priority 	= CRYPTO4XX_CRYPTO_PRIORITY,
++		.cra_flags 	= CRYPTO_ALG_TYPE_ABLKCIPHER | CRYPTO_ALG_ASYNC,
++		.cra_blocksize 	= AES_BLOCK_SIZE,
++		.cra_ctxsize 	= sizeof(struct crypto4xx_ctx),
++		.cra_type 	= &crypto_ablkcipher_type,
++		.cra_init	= crypto4xx_alg_init,
++		.cra_exit	= crypto4xx_alg_exit,
++		.cra_module 	= THIS_MODULE,
++		.cra_u 		= {
++			.ablkcipher = {
++				.min_keysize 	= AES_MIN_KEY_SIZE,
++				.max_keysize 	= AES_MAX_KEY_SIZE,
++				.setkey 	= crypto4xx_setkey_aes_ecb,
++				.encrypt 	= crypto4xx_encrypt,
++				.decrypt 	= crypto4xx_decrypt,
++			},
++		},
++	}},
++	{ .type = CRYPTO_ALG_TYPE_ABLKCIPHER, .u.cipher = {
++		.cra_name 	= "rfc3686(ctr(aes))",
++		.cra_driver_name = "rfc3686-ctr-aes-ppc4xx",
++		.cra_priority 	= CRYPTO4XX_CRYPTO_PRIORITY,
++		.cra_flags 	= CRYPTO_ALG_TYPE_ABLKCIPHER | CRYPTO_ALG_ASYNC,
++		.cra_blocksize 	= AES_BLOCK_SIZE,
++		.cra_ctxsize 	= sizeof(struct crypto4xx_ctx),
++		.cra_type 	= &crypto_ablkcipher_type,
++		.cra_init	= crypto4xx_alg_init,
++		.cra_exit	= crypto4xx_alg_exit,
++		.cra_module 	= THIS_MODULE,
++		.cra_u 		= {
++			.ablkcipher = {
++				.min_keysize 	= AES_MIN_KEY_SIZE,
++				.max_keysize 	= AES_MAX_KEY_SIZE,
++				.setkey 	= crypto4xx_setkey_rfc3686_aes_ctr,
++				.encrypt 	= crypto4xx_encrypt,
++				.decrypt 	= crypto4xx_decrypt,
++			},
++		},
++	}},
+ };
+ 
+ /**
+@@ -1146,6 +1248,8 @@ static int crypto4xx_probe(struct platfo
+ 	struct resource res;
+ 	struct device *dev = &ofdev->dev;
+ 	struct crypto4xx_core_device *core_dev;
++	unsigned int pvr;
++	unsigned short min;
+ 
+ 	rc = of_address_to_resource(ofdev->dev.of_node, 0, &res);
+ 	if (rc)
+@@ -1206,7 +1310,7 @@ static int crypto4xx_probe(struct platfo
+ 	/* Register for Crypto isr, Crypto Engine IRQ */
+ 	core_dev->irq = irq_of_parse_and_map(ofdev->dev.of_node, 0);
+ 	rc = request_irq(core_dev->irq, crypto4xx_ce_interrupt_handler, 0,
+-			 core_dev->dev->name, dev);
++			 "crypto4xx", dev);
+ 	if (rc)
+ 		goto err_request_irq;
+ 
+diff -Naur a/drivers/crypto/amcc/crypto4xx_core.h b/drivers/crypto/amcc/crypto4xx_core.h
+--- a/drivers/crypto/amcc/crypto4xx_core.h
++++ b/drivers/crypto/amcc/crypto4xx_core.h
+@@ -133,6 +133,7 @@ struct crypto4xx_ctx {
+ 	u32 pd_ctl;
+ 	u32 bypass;
+ 	u32 is_hash;
++	u32 is_aes_ctr;
+ 	u32 hash_final;
+ };
+ 
+@@ -190,6 +191,12 @@ extern u32 crypto4xx_build_pd(struct cry
+ 			      void *iv, u32 iv_len);
+ extern int crypto4xx_setkey_aes_cbc(struct crypto_ablkcipher *cipher,
+ 				    const u8 *key, unsigned int keylen);
++extern int crypto4xx_setkey_aes_ecb(struct crypto_ablkcipher *cipher,
++				    const u8 *key, unsigned int keylen);
++extern int crypto4xx_setkey_aes_ctr(struct crypto_ablkcipher *cipher,
++				    const u8 *key, unsigned int keylen);
++extern int crypto4xx_setkey_rfc3686_aes_ctr(struct crypto_ablkcipher *cipher,
++				    const u8 *key, unsigned int keylen);
+ extern int crypto4xx_encrypt(struct ablkcipher_request *req);
+ extern int crypto4xx_decrypt(struct ablkcipher_request *req);
+ extern int crypto4xx_sha1_alg_init(struct crypto_tfm *tfm);
+diff -Naur a/drivers/crypto/amcc/crypto4xx_reg_def.h b/drivers/crypto/amcc/crypto4xx_reg_def.h
+--- a/drivers/crypto/amcc/crypto4xx_reg_def.h
++++ b/drivers/crypto/amcc/crypto4xx_reg_def.h
+@@ -121,13 +121,16 @@
+ #define PPC4XX_PD_SIZE				6
+ #define PPC4XX_CTX_DONE_INT			0x2000
+ #define PPC4XX_PD_DONE_INT			0x8000
++#define PPC4XX_TMO_ERR_INT			0x40000
+ #define PPC4XX_BYTE_ORDER			0x22222
+ #define PPC4XX_INTERRUPT_CLR			0x3ffff
++#define PPC4XX_INTERRUPT_CLR_REVB		0x7ffff
+ #define PPC4XX_PRNG_CTRL_AUTO_EN		0x3
+ #define PPC4XX_DC_3DES_EN			1
+ #define PPC4XX_TRNG_EN				0x00020000
+-#define PPC4XX_INT_DESCR_CNT			4
++#define PPC4XX_INT_DESCR_CNT			7
+ #define PPC4XX_INT_TIMEOUT_CNT			0
++#define PPC4XX_INT_TIMEOUT_CNT_REVB		0x3FF
+ #define PPC4XX_INT_CFG				1
+ /**
+  * all follow define are ad hoc
+diff -Naur a/drivers/crypto/amcc/crypto4xx_sa.h b/drivers/crypto/amcc/crypto4xx_sa.h
+--- a/drivers/crypto/amcc/crypto4xx_sa.h
++++ b/drivers/crypto/amcc/crypto4xx_sa.h
+@@ -112,6 +112,7 @@ union sa_command_0 {
+ 
+ #define CRYPTO_MODE_ECB				0
+ #define CRYPTO_MODE_CBC				1
++#define CRYPTO_MODE_AES_CTR			4
+ 
+ #define CRYPTO_FEEDBACK_MODE_NO_FB		0
+ #define CRYPTO_FEEDBACK_MODE_64BIT_OFB		0

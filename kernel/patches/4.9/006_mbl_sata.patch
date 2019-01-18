@@ -1,0 +1,2330 @@
+--- a/drivers/ata/Kconfig	2017-06-23 08:07:58.550912789 +0000
++++ b/drivers/ata/Kconfig	2017-06-23 08:10:39.829249678 +0000
+@@ -330,9 +330,29 @@
+ 	  This option enables support for old device trees without the
+ 	  "dmas" property.
+ 
++config SATA_DWC_PMP
++    tristate "DesignWare Cores SATA with PMP support"
++    depends on 460EX || APM821xx
++    help
++        This option enables support for the Synopsys DesignWare Cores SATA
++        controller.
++        It can be found on the WD MyBook Live solo or dual driver version.
++
++        If unsure, say N.
++
++config SATA_DWC_NCQ
++    tristate "DesignWare Cores SATA with NCQ support"
++    depends on 460EX || APM821xx
++    help
++        This option enables support for the Synopsys DesignWare Cores SATA
++        controller.
++        It can be found on the WD MyBook Live solo or dual driver version.
++
++        If unsure, say N.
++
+ config SATA_DWC_DEBUG
+ 	bool "Debugging driver version"
+-	depends on SATA_DWC
++	depends on SATA_DWC || SATA_DWC_PMP || SATA_DWC_NCQ
+ 	help
+ 	  This option enables debugging output in the driver.
+ 
+--- a/drivers/ata/Makefile
++++ b/drivers/ata/Makefile
+@@ -9,6 +9,8 @@ obj-$(CONFIG_SATA_FSL)		+= sata_fsl.o
+ obj-$(CONFIG_SATA_INIC162X)	+= sata_inic162x.o
+ obj-$(CONFIG_SATA_SIL24)	+= sata_sil24.o
+ obj-$(CONFIG_SATA_DWC)		+= sata_dwc_460ex.o
++obj-$(CONFIG_SATA_DWC_PMP)	+= sata_dwc_pmp.o
++obj-$(CONFIG_SATA_DWC_NCQ)	+= sata_dwc_ncq.o
+ obj-$(CONFIG_SATA_HIGHBANK)	+= sata_highbank.o libahci.o
+ obj-$(CONFIG_AHCI_DA850)	+= ahci_da850.o libahci.o libahci_platform.o
+ obj-$(CONFIG_AHCI_IMX)		+= ahci_imx.o libahci.o libahci_platform.o
+
+--- /dev/null	2017-06-21 20:25:20.252000000 +0000
++++ b/drivers/ata/sata_dwc_ncq.h	2017-06-23 06:48:25.699279833 +0000
+@@ -0,0 +1,684 @@
++#include <linux/version.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/device.h>
++#include <linux/of_address.h>
++#include <linux/of_irq.h>
++#include <linux/of_platform.h>
++#include <linux/libata.h>
++#include <linux/rtc.h>
++
++#include "../leds/leds.h"
++
++#include <scsi/scsi_host.h>
++#include <scsi/scsi_cmnd.h>
++
++#ifdef CONFIG_SATA_DWC_DEBUG
++#define DWC_DEBUG
++#define dwc_dev_dbg(dev, format, arg...) dev_printk(KERN_INFO, dev, format, ##arg)
++#define dwc_port_dbg(ap, format, arg...) ata_port_printk(ap, KERN_INFO, format, ##arg)
++#define dwc_link_dbg(link, format, arg...) ata_link_printk(link, KERN_INFO, format, ##arg)
++#else
++#define dwc_dev_dbg(dev, format, arg...)
++#define dwc_port_dbg(ap, format, arg...)
++#define dwc_link_dbg(link, format, arg...)
++#endif
++
++#ifdef CONFIG_SATA_DWC_VDEBUG
++#define DEBUG_NCQ
++#define dwc_dev_vdbg(dev, format, arg...) dev_printk(KERN_INFO, dev, format, ##arg)
++#define dwc_port_vdbg(ap, format, arg...) ata_port_printk(ap, KERN_INFO, format, ##arg)
++#define dwc_link_vdbg(link, format, arg...) ata_link_printk(link, KERN_INFO, format, ##arg)
++#define dwc_printk_vdbg(format, arg...) printk(KERN_INFO format, ##arg)
++#define print_dma_registers_vdbg(x) 	print_dma_registers(x)
++#define print_dma_config_vdbg(x,y,z) 	print_dma_config(x,y,z)
++#else
++#define dwc_dev_vdbg(dev, format, arg...)
++#define dwc_port_vdbg(ap, format, arg...)
++#define dwc_link_vdbg(link, format, arg...)
++#define dwc_printk_vdbg(format, arg...)
++#define print_dma_registers_vdbg(x)
++#define print_dma_config_vdbg(x,y,z)
++#endif
++
++#define dwc_dev_info(dev, format, arg...) dev_printk(KERN_INFO, dev, format, ##arg)
++#define dwc_port_info(ap, format, arg...) ata_port_printk(ap, KERN_INFO, format, ##arg)
++#define dwc_link_info(link, format, arg...) ata_link_printk(link, KERN_INFO, format, ##arg)
++#define dwc_printk(format, arg...) printk(KERN_INFO format, ##arg)
++
++#define DRV_NAME        "sata-dwc"
++#define DRV_VERSION     "2.1"
++
++/* Port Multiplier discovery Signature */
++#define PSCR_SCONTROL_DET_ENABLE	0x00000001
++#define PSCR_SSTATUS_DET_PRESENT	0x00000001
++#define PSCR_CLEAR_INTPR_DIAG_X		0x04000000
++
++/* Port multiplier port entry in SCONTROL register */
++#define SCONTROL_PMP_MASK		0x000f0000
++#define PMP_TO_SCONTROL(p)		((p << 16) & 0x000f0000)
++#define SCONTROL_TO_PMP(p)		(((p) & 0x000f0000) >> 16)
++
++
++/* SATA DMA driver Globals */
++#if defined(CONFIG_APM821xx)
++#define DMA_NUM_CHANS			2	// Contrary to the documentation APM821xx has 2 DMA channels
++#else
++#define DMA_NUM_CHANS			1
++#endif
++#define DMA_NUM_CHAN_REGS		8	// 8 * 58x = 2C0 (but only 3 channels exist)
++#define DMA_ALL_CHAN_MASK		(1 << DMA_NUM_CHANS) - 1
++
++/* SATA DMA Register definitions */
++#if defined(CONFIG_APM821xx)
++#define AHB_DMA_BRST_DFLT       64  /* 16 data items burst length */
++#define BURST_LENGTH_ENCODE		3   /* no need to compute if fixed anyhow */	
++//#define AHB_DMA_BRST_DFLT       128  /* 32 data items burst length */
++//#define BURST_LENGTH_ENCODE		4   /* no need to compute if fixed anyhow */
++#define DMA_BLOCK_SIZE			0x2000	/* 8192 = 8K */	
++//#define DMA_BLOCK_SIZE			0x8000  /* 64K */	
++#else
++#define AHB_DMA_BRST_DFLT		64	/* 16 data items burst length */
++#define BURST_LENGTH_ENCODE		3   /* no need to compute if fixed anyhow */	
++#endif
++
++#if defined(CONFIG_APOLLO3G) // && defined(DWC_DEBUG)
++extern void signal_hdd_led(int, int);
++#endif
++
++struct dmareg {
++	u32 low;		/* Low bits 0-31 */
++	u32 high;		/* High bits 32-63 */
++};
++
++/* DMA Per Channel registers */
++struct dmaChanRegs {
++	struct dmareg sar;		/* Source Address */
++	struct dmareg dar;		/* Destination address */
++	struct dmareg llp;		/* Linked List Pointer */
++	struct dmareg ctl;		/* Control */
++	struct dmareg sstat;	/* Source Status not implemented in core */
++	struct dmareg dstat;	/* Destination Status not implemented in core */
++	struct dmareg sstatar;	/* Source Status Address not impl in core */
++	struct dmareg dstatar;	/* Destination Status Address not implemented */
++	struct dmareg cfg;		/* Config */
++	struct dmareg sgr;		/* Source Gather */
++	struct dmareg dsr;		/* Destination Scatter */
++};
++
++/* Generic Interrupt Registers */
++struct dmaIntrRegs {
++	struct dmareg tfr;		/* Transfer Interrupt */
++	struct dmareg block;	/* Block Interrupt */
++	struct dmareg srctran;	/* Source Transfer Interrupt */
++	struct dmareg dsttran;	/* Dest Transfer Interrupt */
++	struct dmareg error;	/* Error */
++};
++
++struct ahb_dma_regs {
++	struct dmaChanRegs	chan_regs[DMA_NUM_CHAN_REGS];
++	struct dmaIntrRegs	interrupt_raw;	/* Raw Interrupt */
++	struct dmaIntrRegs	interrupt_status;	/* Interrupt Status */
++	struct dmaIntrRegs	interrupt_mask;	/* Interrupt Mask */
++	struct dmaIntrRegs	interrupt_clear;	/* Interrupt Clear */
++	struct dmareg		statusInt;		/* Interrupt combined */
++	struct dmareg		rq_srcreg;		/* Src Trans Req */
++	struct dmareg		rq_dstreg;		/* Dst Trans Req */
++	struct dmareg		rq_sgl_srcreg;	/* Sngl Src Trans Req */
++	struct dmareg		rq_sgl_dstreg;	/* Sngl Dst Trans Req */
++	struct dmareg		rq_lst_srcreg;	/* Last Src Trans Req */
++	struct dmareg		rq_lst_dstreg;	/* Last Dst Trans Req */
++	struct dmareg		dma_cfg;		/* DMA Config, overall SATA DMA enablement */
++	struct dmareg		dma_chan_en;	/* DMA Channel Enable */
++	struct dmareg		dma_id;			/* DMA ID */
++	struct dmareg		dma_test;		/* DMA Test */
++	struct dmareg		res1;			/* reserved */
++	struct dmareg		res2;			/* reserved */
++
++	/* DMA Comp Params
++	 * Param 6 = dma_param[0], Param 5 = dma_param[1],
++	 * Param 4 = dma_param[2] ...
++	 */
++	struct dmareg		dma_params[6];
++};
++/* Globals */
++static struct ahb_dma_regs *sata_dma_regs = 0;
++
++/* Data structure for linked list item */
++struct lli {
++	u32		sar;			/* Source Address */
++	u32		dar;			/* Destination address */
++	u32		llp;			/* Linked List Pointer */
++	struct  dmareg ctl;		/* Control */
++#if defined(CONFIG_APM821xx)
++	u32		dstat;  		/* Source status is not supported */
++#else
++	struct	dmareg dstat;	/* Destination Status */
++#endif
++};
++
++#define SATA_DWC_DMAC_LLI_SZ		(sizeof(struct lli))
++#define SATA_DWC_DMAC_LLI_NUM		64
++#define SATA_DWC_DMAC_TWIDTH_BYTES	4
++#define SATA_DWC_DMAC_LLI_TBL_SZ	(SATA_DWC_DMAC_LLI_SZ * SATA_DWC_DMAC_LLI_NUM)
++#define SATA_DWC_DMAC_CTRL_TSIZE_MAX (0x00000800 * SATA_DWC_DMAC_TWIDTH_BYTES) //8K
++/* DMA Register Operation Bits */
++/* Bitfields in CFG */
++#define DW_CFG_DMA_EN		(1 << 0)		// Enable AHB DMA 
++#define DMA_CHANNEL(ch)		(0x00000001 << (ch))	/* Select channel */
++#define DMA_ENABLE_CHAN(ch)	((0x00000001 << (ch)) |	((0x000000001 << (ch)) << 8))
++#define DMA_DISABLE_CHAN(ch)	(0x00000000 | ((0x000000001 << (ch)) << 8))
++
++/* Channel Control Register */
++#define DMA_CTL_BLK_TS(size)	((size) & 0x000000FFF)	/* Blk Transfer size */
++#define DMA_CTL_LLP_SRCEN	0x10000000	/* Blk chain enable Src */
++#define DMA_CTL_LLP_DSTEN	0x08000000	/* Blk chain enable Dst */
++/*
++ * This define is used to set block chaining disabled in the control low
++ * register.  It is already in little endian format so it can be &'d dirctly.
++ * It is essentially: cpu_to_le32(~(DMA_CTL_LLP_SRCEN | DMA_CTL_LLP_DSTEN))
++ */
++#define DMA_CTL_LLP_DISABLE_LE32 0xffffffe7
++#define DMA_CTL_SMS(num)	((num & 0x3) << 25)		/*Src Master Select*/
++#define DMA_CTL_DMS(num)	((num & 0x3) << 23)		/*Dst Master Select*/
++#define DMA_CTL_TTFC(type)	((type & 0x7) << 20)	/*Type&Flow cntr*/
++#define DMA_CTL_TTFC_P2M_DMAC	2			/*Per mem,DMAC cntr*/
++#define DMA_CTL_TTFC_M2P_PER	3			/*Mem per,peri cntr*/
++#define DMA_CTL_SRC_MSIZE(size) ((size & 0x7) << 14)	/*Src Burst Len*/
++#define DMA_CTL_DST_MSIZE(size)	((size & 0x7) << 11)	/*Dst Burst Len*/
++#define DMA_CTL_SINC_INC	0x00000000				/*Src addr incr*/
++#define DMA_CTL_SINC_DEC	0x00000200
++#define DMA_CTL_SINC_NOCHANGE	0x00000400
++#define DMA_CTL_DINC_INC	0x00000000				/*Dst addr incr*/
++#define DMA_CTL_DINC_DEC	0x00000080
++#define DMA_CTL_DINC_NOCHANGE	0x00000100
++#define DMA_CTL_SRC_TRWID(size)	((size & 0x7) << 4)	/*Src Trnsfr Width*/
++#define DMA_CTL_DST_TRWID(size)	((size & 0x7) << 1)	/*Dst Trnsfr Width*/
++#define DMA_CTL_INT_EN		0x00000001				/*Interrupt Enable*/
++
++/* Bitfields in CTL_LO */
++#define DWC_CTLL_INT_EN			(1 << 0)	// irqs enabled?
++#define DWC_CTLL_DST_WIDTH(n)	((n & 0x7) << 1)	// bytes per element
++#define DWC_CTLL_SRC_WIDTH(n)	((n & 0x7) << 4)
++#define DWC_CTLL_DST_INC		(0<<7)		// DAR update/not
++#define DWC_CTLL_DST_DEC		(1<<7)
++#define DWC_CTLL_DST_FIX		(2<<7)
++#define DWC_CTLL_SRC_INC		(0<<9)		// SAR update/not
++#define DWC_CTLL_SRC_DEC		(1<<9)
++#define DWC_CTLL_SRC_FIX		(2<<9)
++#define DWC_CTLL_DST_MSIZE(n)	((n)<<11)	// burst, #elements */
++#define DWC_CTLL_SRC_MSIZE(n)	((n)<<14)
++#define DWC_CTLL_S_GATH_EN		(1 << 17)	// src gather, !FIX */
++#define DWC_CTLL_D_SCAT_EN		(1 << 18)	// dst scatter, !FIX */
++#define DWC_CTLL_FC(n)			((n) << 20)
++#define DWC_CTLL_FC_M2M			(0 << 20)	// SATA DMA mem-to-mem
++#define DWC_CTLL_FC_M2P			(1 << 20)	// SATA DMA mem-to-periph
++#define DWC_CTLL_FC_P2M			(2 << 20)	// SATA DMA periph-to-mem
++#define DWC_CTLL_FC_P2P			(3 << 20)	// SATA DMA periph-to-periph
++/* plus 4 transfer types for peripheral-as-flow-controller */
++#define DWC_CTLL_DMS(n)			((n)<<23)	// dst master select
++#define DWC_CTLL_SMS(n)			((n)<<25)	// src master select
++#define DWC_CTLL_LLP_D_EN		(1 << 27)	// dest block chain
++#define DWC_CTLL_LLP_S_EN		(1 << 28)	// src block chain
++#define DWC_CTLL_LLP_CLR_LE32	0xffffffe7	// clear S_EN & D_EN in LE32
++#define	DWC_CTLL_INT_EN_LE32	0x01000000	// enable innterrupt in LE32
++/* Bitfields in CTL_HI */
++#define DWC_CTLH_DONE		0x00001000
++#define DWC_CTLH_BLOCK_TS_MASK	0x00000fff
++
++/* Bitfields in CFG_HI */
++#define DWC_CFGH_FCMODE		(1 << 0)		// Flow Control Mode
++#define DWC_CFGH_FIFO_MODE	(1 << 1)
++#define DWC_CFGH_PROTCTL(x)	((x) << 2)		// Protection control
++#define DWC_CFGH_DS_UPD_EN	(1 << 5)
++#define DWC_CFGH_SS_UPD_EN	(1 << 6)
++#define DWC_CFGH_SRC_PER(x)	((x) << 7)
++#define DWC_CFGH_DST_PER(x)	((x) << 11)
++
++/* Bitfields in CFG_LO */
++#define DWC_CFGL_CH_PRIOR_MASK	(0x7 << 5)	// priority mask
++#define DWC_CFGL_CH_PRIOR(x)	((x) << 5)	// channel priority
++#define DWC_CFGL_CH_SUSP	(1 << 8)		// pause xfer
++#define DWC_CFGL_FIFO_EMPTY	(1 << 9)		// fifo emppty
++#define DWC_CFGL_HS_DST		(1 << 10)		// handshake w/dst
++#define DWC_CFGL_HS_SRC		(1 << 11)		// handshake w/src
++#define DWC_CFGL_LOCK_CH_XFER	(0 << 12)	// scope of LOCK_CH
++#define DWC_CFGL_LOCK_CH_BLOCK	(1 << 12)
++#define DWC_CFGL_LOCK_CH_XACT	(2 << 12)
++#define DWC_CFGL_LOCK_BUS_XFER	(0 << 14)	// scope of LOCK_BUS
++#define DWC_CFGL_LOCK_BUS_BLOCK	(1 << 14)
++#define DWC_CFGL_LOCK_BUS_XACT	(2 << 14)
++#define DWC_CFGL_LOCK_CH	(1 << 15)		// channel lockout
++#define DWC_CFGL_LOCK_BUS	(1 << 16)		// busmaster lockout
++#define DWC_CFGL_HS_DST_POL	(1 << 18)		// dst handshake active low
++#define DWC_CFGL_HS_SRC_POL	(1 << 19)		// src handshake active low
++#define DWC_CFGL_MAX_BURST(x)	((x) << 20)
++#define DWC_CFGL_RELOAD_SAR	(1 << 30)
++#define DWC_CFGL_RELOAD_DAR	(1 << 31)
++
++/* Bitfields in StatusInt */
++#define DWC_STATUSINT_XFER	(1 << 0)		// Combined status TFR
++#define DWC_STATUSINT_BLOCK	(1 << 1)		// Combined status Block
++#define DWC_STATUSINT_ERR	(1 << 4)		// Combined status TFR
++
++/* Channel Configuration Register low bits */
++#define DMA_CFG_RELD_DST	0x80000000				/*Reload Dst/Src Addr*/
++#define DMA_CFG_RELD_SRC	0x40000000
++#define DMA_CFG_HS_SELSRC	0x00000800				/*SW hndshk Src/Dst*/
++#define DMA_CFG_HS_SELDST	0x00000400
++#define DMA_CFG_FIFOEMPTY   (0x00000001 << 9)	/*FIFO Empty bit*/
++#define DMA_CFG_DST_BURST_ALIGN	(1 << 0)	/* dst burst align */
++#define DMA_CFG_SRC_BURST_ALIGN	(1 << 1)	/* src burst align */
++
++/* Assign hardware handshaking interface (x) to dst / sre peripheral */
++#define DMA_CFG_HW_HS_DEST(int_num)	((int_num & 0xF) << 11)
++#define DMA_CFG_HW_HS_SRC(int_num)	((int_num & 0xF) << 7)
++
++/* Channel Linked List Pointer Register */
++#define DMA_LLP_LMS(addr, master)	(((addr) & 0xfffffffc) | (master))
++#define DMA_LLP_AHBMASTER1		0	/* List Master Select */
++#define DMA_LLP_AHBMASTER2		1
++
++#define SATA_DWC_MAX_PORTS	1
++
++#define SATA_DWC_SCR_OFFSET	0x24
++#define SATA_DWC_REG_OFFSET	0x64
++
++/* DWC SATA Registers */
++struct sata_dwc_regs {
++	u32 fptagr;		/* 1st party DMA tag */
++	u32 fpbor;		/* 1st party DMA buffer offset */
++	u32 fptcr;		/* 1st party DMA Xfr count */
++	u32 dmacr;		/* DMA Control */
++	u32 dbtsr;		/* DMA Burst Transaction size */
++	u32 intpr;		/* Interrupt Pending */
++	u32 intmr;		/* Interrupt Mask */
++	u32 errmr;		/* Error Mask */
++	u32 llcr;		/* Link Layer Control */
++	u32 phycr;		/* PHY Control */
++	u32 physr;		/* PHY Status */
++	u32 rxbistpd;	/* Recvd BIST pattern def register */
++	u32 rxbistpd1;	/* Recvd BIST data dword1 */
++	u32 rxbistpd2;	/* Recvd BIST pattern data dword2 */
++	u32 txbistpd;	/* Trans BIST pattern def register */
++	u32 txbistpd1;	/* Trans BIST data dword1 */
++	u32 txbistpd2;	/* Trans BIST data dword2 */
++	u32 bistcr;		/* BIST Control Register */
++	u32 bistfctr;	/* BIST FIS Count Register */
++	u32 bistsr;		/* BIST Status Register */
++	u32 bistdecr;	/* BIST Dword Error count register */
++	u32 res[15];	/* Reserved locations */
++	u32 testr;		/* Test Register */
++	u32 versionr;	/* Version Register */
++	u32 idr;		/* ID Register */
++	u32 unimpl[192];/* Unimplemented */
++	u32 dmadr[256];	/* FIFO Locations in DMA Mode */
++};
++
++#define SCR_SCONTROL_DET_ENABLE		0x00000001
++#define SCR_SSTATUS_DET_PRESENT		0x00000001
++#define SCR_CLEAR_INTPR_DIAG_X		0x04000000
++
++/* DWC SATA Register Operations */
++#define	SATA_DWC_TXFIFO_DEPTH		0x01FF
++#define	SATA_DWC_RXFIFO_DEPTH		0x01FF
++
++#define SATA_DWC_DMACR_TXMODE		0x00000004	// Always use transmit mode 1
++#define	SATA_DWC_DMACR_TXCHEN		(0x00000001 | SATA_DWC_DMACR_TXMODE)
++#define	SATA_DWC_DMACR_RXCHEN		(0x00000002 | SATA_DWC_DMACR_TXMODE)
++
++#define SATA_DWC_DBTSR_MWR(size)	((size>>2) & SATA_DWC_TXFIFO_DEPTH)
++#define SATA_DWC_DBTSR_MRD(size)	(((size>>2) & SATA_DWC_RXFIFO_DEPTH) << 16)
++
++// SATA DWC Interrupts
++#define	SATA_DWC_INTPR_DMAT			0x00000001
++#define SATA_DWC_INTPR_NEWFP		0x00000002
++#define SATA_DWC_INTPR_PMABRT		0x00000004
++#define SATA_DWC_INTPR_ERR			0x00000008
++#define SATA_DWC_INTPR_NEWBIST		0x00000010
++#define SATA_DWC_INTPR_IPF			0x80000000
++// Interrupt masks
++#define	SATA_DWC_INTMR_DMATM		0x00000001
++#define SATA_DWC_INTMR_NEWFPM		0x00000002
++#define SATA_DWC_INTMR_PMABRTM		0x00000004
++#define SATA_DWC_INTMR_ERRM			0x00000008
++#define SATA_DWC_INTMR_NEWBISTM		0x00000010
++#define SATA_DWC_INTMR_PRIMERRM		0x00000020
++#define SATA_DWC_INTPR_CMDGOOD		0x00000080
++#define SATA_DWC_INTPR_CMDABORT		0x00000040
++
++#define SATA_DWC_LLCR_SCRAMEN		0x00000001
++#define SATA_DWC_LLCR_DESCRAMEN		0x00000002
++#define SATA_DWC_LLCR_RPDEN			0x00000004
++
++// Defines for serror register
++#define SATA_DWC_SERR_ERRI      0x00000001 // Recovered data integrity error
++#define SATA_DWC_SERR_ERRM      0x00000002 // Recovered communication error
++#define SATA_DWC_SERR_ERRT      0x00000100 // Non-recovered transient data integrity error
++#define SATA_DWC_SERR_ERRC      0x00000200 // Non-recovered persistent communication or data integrity error
++#define SATA_DWC_SERR_ERRP      0x00000400 // Protocol error
++#define SATA_DWC_SERR_ERRE      0x00000800 // Internal host adapter error
++#define SATA_DWC_SERR_DIAGN     0x00010000 // PHYRdy change
++#define SATA_DWC_SERR_DIAGI     0x00020000 // PHY internal error
++#define SATA_DWC_SERR_DIAGW     0x00040000 // Phy COMWAKE signal is detected
++#define SATA_DWC_SERR_DIAGB     0x00080000 // 10b to 8b decoder err
++#define SATA_DWC_SERR_DIAGT     0x00100000 // Disparity error
++#define SATA_DWC_SERR_DIAGC		0x00200000 // CRC error
++#define SATA_DWC_SERR_DIAGH		0x00400000 // Handshake error
++#define SATA_DWC_SERR_DIAGL		0x00800000 // Link sequence (illegal transition) error
++#define SATA_DWC_SERR_DIAGS		0x01000000 // Transport state transition error
++#define SATA_DWC_SERR_DIAGF		0x02000000 // Unrecognized FIS type
++#define SATA_DWC_SERR_DIAGX		0x04000000 // Exchanged error - Set when PHY COMINIT signal is detected.
++#define SATA_DWC_SERR_DIAGA		0x08000000 // Port Selector Presence detected
++
++/* This is all error bits, zero's are reserved fields. */
++#define SATA_DWC_SERR_ERR_BITS	0x0FFF0F03
++
++#define SATA_DWC_SCR0_SPD_GET(v)	(((v) >> 4) & 0x0000000F)
++#define SATA_DWC_DMACR_TX_CLEAR(v)	(((v) & ~SATA_DWC_DMACR_TXCHEN)| SATA_DWC_DMACR_TXMODE)
++#define SATA_DWC_DMACR_RX_CLEAR(v)	(((v) & ~SATA_DWC_DMACR_RXCHEN)| SATA_DWC_DMACR_TXMODE)
++#define SATA_DWC_DMACR_TXRXCH_CLEAR	SATA_DWC_DMACR_TXMODE // Always use transmit mode 1
++
++/* SATA DWC registers can be set via ap->ioaddr or hsdev->sata_dwc_regs */
++struct sata_dwc_device {
++	struct 	device *dev;		/* generic device struct */
++	struct 	ata_probe_ent *pe;	/* ptr to probe-ent */
++	struct 	ata_host *host;
++	struct 	sata_dwc_regs __iomem *sata_dwc_regs;	/* DW Synopsys SATA specific */
++	struct 	resource reg;       /* Resource for register */
++	u8		__iomem *reg_base;
++	u8     	*scr_base;
++	int		dma_channel;		/* DWC SATA DMA channel  */
++	int		irq_dma;
++	struct	timer_list an_timer;
++};
++
++#define SATA_DWC_QCMD_MAX	32
++
++struct sata_dwc_device_port {
++	struct 	sata_dwc_device	*hsdev;
++	int		cmd_issued[SATA_DWC_QCMD_MAX]; 	// QC issued
++	int		dma_pending[SATA_DWC_QCMD_MAX]; // DMA command needs to be processed
++//	u32		dma_chan[SATA_DWC_QCMD_MAX]; 	// Consider to be removed
++	struct	lli *llit[SATA_DWC_QCMD_MAX]; 	// NCQ
++	dma_addr_t llit_dma[SATA_DWC_QCMD_MAX];
++	int		num_lli[SATA_DWC_QCMD_MAX];
++	u32 	sactive_issued;				/* issued queued ops */
++	u32 	sactive_queued;				/* queued ops */
++	u32		dma_dir;					// DMA direction bitmask for each tag (0=read, 1=write)
++	u32		dma_complete; 				// tasks completes DMA transfer
++	int		no_dma_pending; 			// Number of pending DMA
++	int		dma_pending_isr_count; 		// Number of interrupt count
++	int		max_tag; 					// maximum tag, used for debug NCQ only
++};
++
++/* Commonly used DWC SATA driver Macros */
++#define HSDEV_FROM_HOST(host)	((struct sata_dwc_device *) (host)->private_data)
++#define HSDEV_FROM_AP(ap)		((struct sata_dwc_device *) (ap)->host->private_data)
++#define HSDEVP_FROM_AP(ap)		((struct sata_dwc_device_port *) (ap)->private_data)
++#define HSDEV_FROM_QC(qc)		((struct sata_dwc_device *) (qc)->ap->host->private_data)
++#define HSDEV_FROM_HSDEVP(p) 	((struct sata_dwc_device *) (p)->hsdev)
++#define IOMEM(x) (void __iomem *)(x)
++
++#undef BIT
++#define BITFIELD(x)		char _#x 
++#define BIT(b)			(0x00000001 << (b))  //defined in linux/bitops.h
++#define BITS(n,b)		((0x00000000 | (n)) << (b))
++#define BITRANGE(n,b)	((0x00000000 |
++#define SETB(x,b) 		((x) |= BIT(b))
++#define SETBS(x,n,b) 	((x) != BITS(n,b))
++#define CLRB(x,b) 		((x) &=~BIT(b))
++#define CLRBS(x,b) 		((x) &=~BITS(n,b))
++#define REVB(x,b) 		((x) ^= BIT(b))
++#define TSETB(x,b) 		((x) & (1<<(b)))
++#define TCLRB(x,b) 		(((x)>>(b))&1)
++
++#define TAG2MASK(tag)			((u32)(0x00000001 << (tag & 0x1f)))
++#define DMA_DIR_SET_READ(var,tag)	var &= ~((u32)(0x00000001 << (tag & 0x1f)))
++#define DMA_DIR_SET_WRITE(var,tag)	var |= ((u32)(0x00000001 << (tag & 0x1f)))
++#define DMA_DIR_GET(var,tag) 	((var) & (1<<(tag & 0x1f)))
++#define DMA_PENDING_SET(var,tag) 	var |= ((u32)(0x00000001 << (tag & 0x1f)))
++#define DMA_PENDING_CLEAR(var,tag) 	var &= ~((u32)(0x00000001 << (tag & 0x1f)))
++#define DMA_PENDING_GET(var,tag)	((var) & (1<<(tag & 0x1f)))
++
++enum {
++	SATA_DWC_CMD_ISSUED_NOT		= 0,
++	SATA_DWC_CMD_ISSUED_PENDING	= 1,
++	SATA_DWC_CMD_ISSUED_EXEC	= 2,
++	SATA_DWC_CMD_ISSUED_DONE	= 3,
++
++	SATA_DWC_DMA_PENDING_NONE	= 0,
++	SATA_DWC_DMA_PENDING_TX		= 1,
++	SATA_DWC_DMA_PENDING_RX		= 2,
++	SATA_DWC_DMA_PENDING		= 3,
++	SATA_DWC_DMA_DONE			= 4,  // NCQ
++};
++
++/* Prototypes */
++static __always_inline void sata_dwc_bmdma_start_by_tag(struct ata_queued_cmd *qc, u8 tag);
++static __always_inline void sata_dwc_qc_complete(struct ata_port *ap, struct ata_queued_cmd *qc, u8 tag, u32 check_status);
++static void sata_dwc_port_stop(struct ata_port *ap);
++static __always_inline int dma_init(struct sata_dwc_device *hsdev);
++static __always_inline void dma_exit(struct sata_dwc_device *hsdev);
++static void dma_dwc_terminate_dma(struct ata_port *ap, int dma_ch);
++static __always_inline void sata_dwc_enable_interrupts(struct sata_dwc_regs __iomem *regs);
++static void sata_dwc_init_port (struct ata_port *ap);
++static const char* sata_reg2txt(unsigned int id);
++u8 sata_dwc_check_status(struct ata_port *ap);
++#define SATA_DWC_CHECK_STATUS(ap) (u8)ioread8(ap->ioaddr.status_addr)
++#define SATA_DWC_IRQ_CLEAR(bmdma_addr) iowrite8(ioread8(bmdma_addr), bmdma_addr)
++char *u32ToBits(u32 val){
++    static char bitstr[] = "0000:0000:0000:0000:0000:0000:0000:0000\0", *cp = bitstr;
++	int i, j;
++	for (i=0; i<8; i++, cp++)
++		for (j=0; j<4; j++, cp++)  { *cp = (val & 0x80000000)?'1':'0'; val <<= 1; }
++//	return bitstr;
++	return memcpy(kmalloc(40,GFP_KERNEL), bitstr, 40);
++}
++static int sata_dwc_scr_read(struct ata_link *link, unsigned int scr, u32 *val) {
++	register struct ata_port *ap = link->ap;
++	if (unlikely(scr > SCR_NOTIFICATION)) {
++		dev_err(ap->dev, "%s: Incorrect SCR offset 0x%02x\n",	__func__, scr);
++		return -EINVAL;
++	}
++	*val = in_le32((void __iomem *)ap->ioaddr.scr_addr + (scr * 4));
++	dwc_dev_vdbg(ap->dev, "%s: id=%d reg=%s val=0x%08x\n", __func__, ap->print_id, sata_reg2txt(scr), *val);
++	return 0;
++}
++
++static int sata_dwc_scr_write(struct ata_link *link, unsigned int scr, u32 val) {
++	register struct ata_port *ap = link->ap;
++	dwc_dev_vdbg(ap->dev, "%s: id=%d reg=%s val=0x%08x\n",__func__, ap->print_id, sata_reg2txt(scr), val);
++	if (unlikely(scr > SCR_NOTIFICATION)) {
++		dev_err(ap->dev, "%s: Incorrect SCR offset 0x%02x\n",	__func__, scr);
++		return -EINVAL;
++	}
++	out_le32((void __iomem *)ap->ioaddr.scr_addr + (scr << 2), val);	
++	return 0;
++}
++
++#define SATA_DWC_CORE_SCR_READ(hsdev,scr) in_le32((void __iomem *)hsdev->scr_base + (scr<<2))
++/*
++static inline u32 sata_dwc_core_scr_read (struct ata_port *ap, unsigned int scr)
++{
++	struct sata_dwc_device *hsdev = HSDEV_FROM_AP(ap);
++	return in_le32((void __iomem *)hsdev->scr_base + (scr * 4));
++}
++*/
++#define SATA_DWC_CORE_SCR_WRITE(hsdev,scr,val) out_le32((void __iomem *)hsdev->scr_base + (scr<<2), val)
++/*
++static inline void sata_dwc_core_scr_write (struct ata_port *ap, unsigned int scr, u32 val)
++{
++	struct sata_dwc_device *hsdev = HSDEV_FROM_AP(ap);
++	out_le32((void __iomem *)hsdev->scr_base + (scr * 4), val);
++}
++*/
++#define SATA_DWC_CORE_SCR_SETBIT(dev,reg,b) SATA_DWC_CORE_SCR_WRITE(dev, reg ,\
++	(SATA_DWC_CORE_SCR_READ(dev,reg) | (b)))
++
++#ifdef CONFIG_SATA_DWC_DEBUG
++//ata_eh_link_report(struct ata_link *link)  may make these unneeded
++/* Convert QC protocol to text */
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4,8,0)
++static const char *prot2txt(enum ata_tf_protocols protocol) {
++#else
++static const char *prot2txt(enum ata_prot_flags protocol) {
++#endif
++	switch (protocol) {
++		case ATA_PROT_UNKNOWN:	return "unknown";
++		case ATA_PROT_NODATA:	return "nodata";
++		case ATA_PROT_PIO:		return "ATA PIO";
++		case ATA_PROT_DMA:		return "ATA DMA";
++		case ATA_PROT_NCQ:		return "ATA NCQ";
++		case ATAPI_PROT_NODATA: return "ATAPI no data";
++		case ATAPI_PROT_PIO:	return "ATAPI PIO";
++		case ATAPI_PROT_DMA:	return "ATAPI DMA";
++		default:				return "err";
++	}
++}
++
++/* Convert DMA direction to text */
++static const char *dir2txt(enum dma_data_direction dir) {
++	switch (dir) {
++		case DMA_BIDIRECTIONAL:	return "Bidirectional";
++		case DMA_TO_DEVICE:		return "ToDevice";
++		case DMA_FROM_DEVICE:	return "FromDevice";
++		case DMA_NONE:			return "None";
++		default:				return "Error";
++	}
++}
++#endif
++
++/* Convert serror register bits to text */
++static void print_serror2txt (u32 serror) {
++	printk("Detect errors (0x%08x):", serror);
++	if (serror & SATA_DWC_SERR_ERRI) printk(" ERRI");
++	if (serror & SATA_DWC_SERR_ERRM) printk(" ERRM");
++	if (serror & SATA_DWC_SERR_ERRT) printk(" ERRT");
++	if (serror & SATA_DWC_SERR_ERRC) printk(" ERRC");
++	if (serror & SATA_DWC_SERR_ERRP) printk(" ERRP");
++	if (serror & SATA_DWC_SERR_ERRE) printk(" ERRE");
++	if (serror & SATA_DWC_SERR_DIAGN) printk(" DIAGN");
++	if (serror & SATA_DWC_SERR_DIAGI) printk(" DIAGI");
++	if (serror & SATA_DWC_SERR_DIAGW) printk(" DIAGW");
++	if (serror & SATA_DWC_SERR_DIAGB) printk(" DIAGB");
++	if (serror & SATA_DWC_SERR_DIAGT) printk(" DIAGT");
++	if (serror & SATA_DWC_SERR_DIAGC) printk(" DIAGC");
++	if (serror & SATA_DWC_SERR_DIAGH) printk(" DIAGH");
++	if (serror & SATA_DWC_SERR_DIAGL) printk(" DIAGL");
++	if (serror & SATA_DWC_SERR_DIAGS) printk(" DIAGS");
++	if (serror & SATA_DWC_SERR_DIAGF) printk(" DIAGF");
++	if (serror & SATA_DWC_SERR_DIAGX) printk(" DIAGX");
++	if (serror & SATA_DWC_SERR_DIAGA) printk(" DIAGA");
++	printk("\n");
++}
++
++/* Convert SATA command to text */
++// replaced by ata_get_cmd_descript
++const char *ata_get_cmd_descript(u8 command);
++#define cmd2txt(x) ata_get_cmd_descript((x)->command)
++
++#ifdef CONFIG_SATA_DWC_VDEBUG
++/* Dump content of the taskfile */
++static void sata_dwc_tf_dump(struct device *dwc_dev, struct ata_taskfile *tf) {
++	dwc_dev_vdbg(dwc_dev, "taskfile cmd:0x%02x protocol:%s flags:0x%lx device:%x\n",
++		tf->command, prot2txt(tf->protocol), tf->flags, tf->device);
++	dwc_dev_vdbg(dwc_dev, "feature:0x%02x nsect:0x%x lbal: 0x%x lbam:0x%x lbah:0x%x\n",
++		tf->feature, tf->nsect, tf->lbal, tf->lbam, tf->lbah);
++	dwc_dev_vdbg(dwc_dev, "hob_feature:0x%02x hob_nsect:0x%x hob_lbal:0x%x hob_lbam:0x%x hob_lbah:0x%x\n",
++		tf->hob_feature, tf->hob_nsect, tf->hob_lbal, tf->hob_lbam,	tf->hob_lbah);
++}
++
++/* Convert SATA Control and Status registers to text */
++static const char* sata_reg2txt(unsigned int id) {
++	switch (id) {
++		case SCR_STATUS:		return "SCR_STATUS";
++	case SCR_ERROR:		return "SCR_ERROR";
++		case SCR_CONTROL:		return "SCR_CONTROL";
++		case SCR_NOTIFICATION:	return "SCR_NOTIFICATION";
++		default:				return "err";
++	}
++}
++
++/* Print out current setting of the DMA configuration by reading DMA registers */
++#define in_cpu32(x) 		le32_to_cpu(in_le32(x))
++#define in_cpu32_bits(x) 	u32ToBits(in_cpu32(x))
++#define	in_le32_bits(x) 	u32ToBits(in_le32(x))
++static void print_dma_registers(struct sata_dwc_device *hsdev) {
++	int dma_chan = hsdev->dma_channel;
++	struct dmaChanRegs __iomem *chanReg = &(sata_dma_regs->chan_regs[dma_chan]);
++	struct sata_dwc_regs __iomem *dwc_regs = hsdev->sata_dwc_regs;
++	printk("Content of DMA registers in channel %d:\n", dma_chan);
++	printk("\t- cfg.low 		: 0x%08x\n", in_le32(&chanReg->cfg.low));
++	printk("\t- cfg.high		: 0x%08x\n", in_le32(&chanReg->cfg.high));
++	printk("\t- ctl.low 		: 0x%08x\n", in_le32(&chanReg->ctl.low));
++	printk("\t- ctl.high		: 0x%08x\n", in_le32(&chanReg->ctl.high));
++	printk("\t- llp.low 		: 0x%08x\n", in_cpu32(&chanReg->llp.low));
++	printk("\t- sar.low 		: 0x%08x\n", in_cpu32(&chanReg->sar.low));
++	printk("\t- sar.high		: 0x%08x\n", in_cpu32(&chanReg->sar.high));
++	printk("\t- dar.low 		: 0x%08x\n", in_cpu32(&chanReg->dar.low));
++	printk("\t- dar.high		: 0x%08x\n", in_cpu32(&chanReg->dar.high));
++	printk("\t- sgr.low 		: 0x%08x\n", in_cpu32(&chanReg->sgr.low));
++	printk("\t- dma_cfg.low		: 0x%08x\n", in_le32(&sata_dma_regs->dma_cfg.low));;
++	printk("\t- dma_chan_en.low	: 0x%08x\n", in_le32(&sata_dma_regs->dma_chan_en.low));;
++	printk("\t- INTPR			: 0x%08x\n", in_le32(&dwc_regs->intpr));
++	printk("\t- INTMR			: 0x%08x\n", in_le32(&dwc_regs->intmr));
++	printk("\t- ERRMR			: 0x%08x\n", in_le32(&dwc_regs->errmr));
++	printk("\t- SERROR 			: 0x%08x\n", SATA_DWC_CORE_SCR_READ(hsdev, SCR_ERROR));
++	printk("\t- IRR_MASK.ERR	: 0x%08x\n", in_le32(&sata_dma_regs->interrupt_mask.error.low));
++	printk("\t- IRR_MASK.TFR	: 0x%08x\n", in_le32(&sata_dma_regs->interrupt_mask.tfr.low));
++	printk("\t- IRR_STAT.ERR	: 0x%08x\n", in_le32(&sata_dma_regs->interrupt_status.error.low));
++	printk("\t- IRR_STAT.TFR	: 0x%08x\n", in_le32(&sata_dma_regs->interrupt_status.tfr.low));
++	printk("\t- CH_EN.low		: 0x%08x\n", in_le32(&sata_dma_regs->dma_chan_en.low));
++/*
++	printk("\t- cfg.low 		: 0b%s\n", 	 in_le32_bits(&chanReg->cfg.low));
++	printk("\t- cfg.high		: 0b%s\n",   in_le32_bits(&chanReg->cfg.high));
++	printk("\t- ctl.low			: 0b%s\n",   in_le32_bits(&chanReg->ctl.low));
++	printk("\t- ctl.high		: 0b%s\n",   in_le32_bits(&chanReg->ctl.high));
++	printk("\t- llp.low 		: 0x%08x\n", in_cpu32(&chanReg->llp.low));
++	printk("\t- sar.low 		: 0x%08x\n", in_cpu32(&chanReg->sar.low));
++	printk("\t- sar.high		: 0x%08x\n", in_cpu32(&chanReg->sar.high));
++	printk("\t- dar.low 		: 0x%08x\n", in_cpu32(&chanReg->dar.low));
++	printk("\t- dar.high		: 0x%08x\n", in_cpu32(&chanReg->dar.high));
++	printk("\t- sgr.low 		: 0x%08x\n", in_cpu32(&chanReg->sgr.low));
++	printk("\t- INTPR			: 0b%s\n",   in_le32_bits(&dwc_regs->intpr));
++	printk("\t- INTMR			: 0b%s\n",   in_le32_bits(&dwc_regs->intmr));
++	printk("\t- ERRMR			: 0b%s\n",   in_le32_bits(&dwc_regs->errmr));
++	printk("\t- SERROR			: 0x%08x\n", SATA_DWC_CORE_SCR_READ(hsdev, SCR_ERROR));
++	printk("\t- IRR_MASK.ERR	: 0b%s\n",   in_le32_bits(&sata_dma_regs->interrupt_mask.error.low));
++	printk("\t- IRR_MASK.TFR	: 0b%s\n",   in_le32_bits(&sata_dma_regs->interrupt_mask.tfr.low));
++	printk("\t- IRR_STAT.ERR	: 0b%s\n",   in_le32_bits(&sata_dma_regs->interrupt_status.error.low));
++	printk("\t- IRR_STAT.TFR	: 0b%s\n",   in_le32_bits(&sata_dma_regs->interrupt_status.tfr.low));
++*/
++}
++
++/* Print out DMA information set up in LLI */
++static void print_dma_config(struct ata_port *ap, struct lli *lli, int idx) {
++	printk("SATA DWC Port DMA configuration\n");
++	printk("index %d\n", idx);
++	dwc_port_vdbg(ap, "%s: index %d\n", __func__, idx);
++	dwc_port_vdbg(ap, "%s - lli[%d].ctl.high: 0x%08x\n", __func__, idx, lli->ctl.high);
++	dwc_port_vdbg(ap, "%s - lli[%d].ctl.low : 0x%08x\n", __func__, idx, lli->ctl.low);
++	dwc_port_vdbg(ap, "%s - lli[%d].lli.dar : 0x%08x\n", __func__, idx, lli->dar);
++	dwc_port_vdbg(ap, "%s - lli[%d].lli.sar : 0x%08x\n", __func__, idx, lli->sar);
++	dwc_port_vdbg(ap, "%s - lli[%d].next_llp: 0x%08x\n", __func__, idx, lli->llp);
++}
++#endif
++/*
++ * Function: get_burst_length_encode
++ * arguments: datalength: length in bytes of data
++ * returns value to be programmed in register corresponding to data length
++ * This value is effectively the log(base 2) of the length
++ */
++/*
++static inline int get_burst_length_encode(int datalength) {
++	int items = datalength >> 2;	// div by 4 to get lword count
++	if (items >= 64)	return 5;
++	if (items >= 32)	return 4;
++	if (items >= 16)	return 3;
++	if (items >= 8)		return 2;
++	if (items >= 4)		return 1;
++	return 0;
++}
++*/
+--- /dev/null	2017-06-21 20:25:20.252000000 +0000
++++ b/drivers/ata/sata_dwc_ncq.c	2017-06-19 13:14:06.456871708 +0000
+@@ -0,0 +1,1595 @@
++/* drivers/ata/sata_dwc.c
++ * Synopsys DesignWare Cores (DWC) SATA host driver
++ * Author: Mark Miesfeld <mmiesfeld@amcc.com>
++ * Ported from 2.6.19.2 to 2.6.25/26 by Stefan Roese <sr@denx.de>
++ * Copyright 2008 DENX Software Engineering
++ *
++ * V2.0: Support Port Multiplier
++ * V2.1: Support NCQ - Modified by Ewald Comhaire
++ * Based on versions provided by AMCC and Synopsys which are:
++ *          Copyright 2006 Applied Micro Circuits Corporation
++ *          COPYRIGHT (C) 2005  SYNOPSYS, INC.  ALL RIGHTS RESERVED
++ * This program is free software; you can redistribute  it and/or modify it
++ * under  the terms of  the GNU General  Public License as published by the
++ * Free Software Foundation;  either version 2 of the  License, or (at your
++ * option) any later version. */
++
++//#define SATA_DWC_NCQ
++//#define CONFIG_SATA_DWC_VDEBUG
++#undef CONFIG_SATA_DWC_DEBUG
++ 
++#include "sata_dwc_ncq.h"
++
++/* Globals */
++static struct sata_dwc_device* dwc_dev_list[2]; // Device list
++static int pause_after_command_exec = 10;
++static int pause_dma_pending = 10;
++static int dma_intr_registered = 0;
++
++/* Clear Interrupts on a DMA channel */
++static __always_inline void clear_chan_interrupts(int dma_chan) {
++	register u32 mask = DMA_CHANNEL(dma_chan);
++	struct dmaIntrRegs* __iomem reg = &(sata_dma_regs->interrupt_clear);
++	out_le32(&reg->tfr.low, mask);
++	out_le32(&reg->block.low, mask);
++	out_le32(&reg->error.low, mask);
++	out_le32(&reg->srctran.low, mask);
++	out_le32(&reg->dsttran.low, mask);
++}
++
++/* Clear DMA Control Register after completing transferring data using AHB DMA */
++static __always_inline void sata_dwc_clear_dmacr(struct sata_dwc_device *hsdev, u32 __iomem *dmacr, int dma_pending) {
++	if (dma_pending == SATA_DWC_DMA_PENDING_RX)			// Clear receive channel enable bit
++		out_le32(dmacr, SATA_DWC_DMACR_RX_CLEAR(in_le32(dmacr)));
++	else if (dma_pending == SATA_DWC_DMA_PENDING_TX) 	// Clear transmit channel enable bit
++		out_le32(dmacr, SATA_DWC_DMACR_TX_CLEAR(in_le32(dmacr)));
++	else { // Driver out of sync, clear both receive and transmit channels
++		dev_err(hsdev->dev, "%s: DMA protocol RX/TX not pending dmacr:0x%08x\n", __func__, in_le32(dmacr));
++		out_le32(dmacr, SATA_DWC_DMACR_TXRXCH_CLEAR); //Clear all interrupts, but keep TXMOD=1
++	}
++}
++
++/* Function: dma_request_channel: returns channel number if available else -1 */
++#define DMA_REQUEST_CHANNEL(ch) (in_le32(&sata_dma_regs->dma_chan_en.low) & DMA_CHANNEL(ch)) ? -1 : ch
++
++/* DMA Interrupt service routine called for DMA with/without NCQ.  hsdev_instance can't be used since IRQ is shared */
++static irqreturn_t dma_isr(int irq, void *hsdev_instance) {
++	struct dmaIntrRegs __iomem *intr_status = &(sata_dma_regs->interrupt_status);	/* Interrupt Status */
++	volatile u32 tfr_reg = in_le32(&intr_status->tfr.low);
++	volatile u32 err_reg = in_le32(&intr_status->error.low);
++	//u32 statusIntr = in_le32(&sata_dma_regs->statusInt.low);	// Combined interrupt status register
++	int chan = fls(tfr_reg | err_reg) - 1;		// dma channel is first bit 1
++	struct sata_dwc_device *hsdev = dwc_dev_list[chan];
++	struct ata_host *host = hsdev->host;
++	struct ata_port *ap = host->ports[0];
++	register struct sata_dwc_device_port *hsdevp = HSDEVP_FROM_AP(ap);
++	unsigned long flags = 0;
++	u8 tag = (unlikely(ap->link.active_tag == ATA_TAG_POISON)) ? 0 : ap->link.active_tag;
++	int dma_pending = hsdevp->dma_pending[tag];
++	struct ata_queued_cmd *qc = ata_qc_from_tag(ap, tag); // &ap->qcmd[tag]
++
++	spin_lock_irqsave(&host->lock, flags);
++	dwc_port_dbg(ap, "%s: DMA chan:%d no_dma_pending=%d dma_pending[tag]=%d tag=%d qc->tag=%d cmd_issued=%d dir:%s\n", 
++		__func__, chan, hsdevp->no_dma_pending, dma_pending, tag, qc->tag, hsdevp->cmd_issued[tag], 
++		(dma_pending==0)? "DMA_PENDING_NONE" : (dma_pending==1)? "DMA_PENDING_TX" : "DMA_PENDING_RX");
++	dwc_port_dbg(ap, "%s: tfr=0x%04x err=0x%04x combined status intr=0x%04x\n", __func__, tfr_reg, err_reg, in_le32(&sata_dma_regs->statusInt.low));
++
++	hsdevp->dma_pending[tag] = SATA_DWC_DMA_DONE; // Flag DMA complete
++	hsdevp->dma_complete |= TAG2MASK(tag);
++	hsdevp->no_dma_pending--;
++
++	/* Interrupt to indicate DMA transfer completion to the destination peripheral */
++	if (likely(tfr_reg & DMA_CHANNEL(chan))) {
++		u32 __iomem *dmacr = &(hsdev->sata_dwc_regs->dmacr); 
++		sata_dwc_clear_dmacr(hsdev, dmacr, dma_pending);	//  AHB DMA Xfer complete, clear DMA Control Register
++		//hsdevp->dma_pending[tag] = SATA_DWC_DMA_DONE;	// Flag DMA intr complete
++		if (hsdevp->cmd_issued[tag] == SATA_DWC_CMD_ISSUED_DONE) { // Both SATA device & DMA intr received
++			sata_dwc_qc_complete(ap, qc, tag, 1); // ata_qc_from_tag(ap, tag)
++			if (hsdevp->no_dma_pending == 0) ap->link.active_tag = ATA_TAG_POISON;
++		} 
++		out_le32(&sata_dma_regs->interrupt_clear.tfr.low, DMA_CHANNEL(chan)); // Clear interrupt register
++		dwc_port_dbg(ap, "%s: dmacr=0x%08x tfr=0x%08x\n", 
++			__func__, in_le32(dmacr), in_le32(&sata_dma_regs->interrupt_status.tfr.low));
++	}
++	// Process Error Interrupt: cancel DMA transfer + disable channel
++	if (unlikely(err_reg & DMA_CHANNEL(chan))) { // Process Error Interrupt: cancel DMA transfer + disable channel
++		dev_err(ap->dev, "Error interrupt err_reg=0x%08x\n", err_reg);
++		spin_lock_irqsave(ap->lock, flags);
++		dma_dwc_terminate_dma(ap, chan);	// disable DMAC
++		if (likely(qc)) qc->err_mask |= AC_ERR_ATA_BUS;	// Set QC flag to Fail state		
++		spin_unlock_irqrestore(ap->lock, flags);
++		out_le32(&sata_dma_regs->interrupt_clear.error.low, DMA_CHANNEL(chan));  // Clear error register
++	}
++	spin_unlock_irqrestore(&host->lock, flags);
++	return IRQ_HANDLED;
++}
++
++static __always_inline int dma_register_isr (struct sata_dwc_device *hsdev) {
++	int irq = hsdev->irq_dma;
++	if (!dma_intr_registered) {	// 2 SATA controllers share the same DMA engine and interrupt
++		dev_notice(hsdev->dev, "Register irq:%d\n", irq);
++		if (request_irq(irq, dma_isr, IRQF_SHARED, "SATA DMA", hsdev)) {
++			dev_err(hsdev->dev, "Could not get IRQ %d\n", irq);
++			return -ENODEV;
++		}
++		dma_intr_registered++;
++	}
++	return 0;
++}
++
++/* This function registers ISR for a particular DMA channel interrupt */
++static int dma_request_interrupts(struct sata_dwc_device *hsdev, int irq) {
++	struct dmaIntrRegs __iomem *intrMask = &(sata_dma_regs->interrupt_mask);	// Interrupt Status
++	int ch = hsdev->dma_channel;
++	out_le32(&intrMask->error.low, in_le32(&intrMask->error.low)| DMA_ENABLE_CHAN(ch)); // Unmask error interrupt
++	out_le32(&intrMask->tfr.low, in_le32(&intrMask->tfr.low) | DMA_ENABLE_CHAN(ch));	//Unmask end-of-transfer interrupt
++
++	dwc_dev_vdbg(hsdev->dev, "Current value of interrupt_mask.error=0x%08x\n", in_le32(&sata_dma_regs->interrupt_mask.error.low));
++	dwc_dev_vdbg(hsdev->dev, "Current value of interrupt_mask.tfr=0x%08x\n", in_le32(&sata_dma_regs->interrupt_mask.tfr.low));
++	return 0;
++}
++
++/* Function map_sg_to_lli: returns array of AHB DMA Linked List Items
++ * This function creates a list of LLIs for DMA Xfr and returns the number of elements in the DMA linked list.
++ * Note that the Synopsis driver has a comment proposing that better performance
++ * is possible by only enabling interrupts on the last item in the linked list.
++ * However, it seems that could be a problem if an error happened on one of the
++ * first items.  The transfer would halt, but no error interrupt would occur.
++ * Currently this function sets interrupts enabled for each linked list item: DMA_CTL_INT_EN. */
++//static inline int map_sg_to_lli(struct ata_queued_cmd *qc, struct lli *lli, dma_addr_t dma_lli, void __iomem *dmadr)
++static __always_inline int map_sg_to_lli(struct ata_queued_cmd *qc, struct sata_dwc_device_port *hsdevp, 
++	struct sata_dwc_device *hsdev, u8 tag) {
++	struct scatterlist *sg = qc->sg;
++	void __iomem *dmadr = &hsdev->sata_dwc_regs->dmadr;
++	register dma_addr_t next_llp, dma_lli = hsdevp->llit_dma[tag];
++	struct lli *lli = hsdevp->llit[tag];
++	int i, num_elems = qc->n_elem, dma_ch = hsdev->dma_channel;
++	int dir = qc->dma_dir; // DMA_DEV_TO_MEM (2) or DMA_MEM_TO_DEV (1)
++	register int idx = 0;
++	register u32 len, addr, sg_len; // offset, fis_len = 0, 
++	
++	dwc_port_dbg(qc->ap, "%s: sg=%p nelem=%d lli=%p dma_lli=0x%08x dmadr=0x%08x dir=%s dma chan=%d\n", 
++		__func__, sg, num_elems, lli, (u32)dma_lli, (u32)dmadr, dir2txt(dir), dma_ch);
++
++	for (i = 0; i < num_elems; i++, sg++) {
++		addr = (u32) sg_dma_address(sg);
++		sg_len = sg_dma_len(sg);
++		dwc_port_dbg(qc->ap, "%s: elem=%d sg_addr=0x%x sg_len=%x(%d) channel=%d\n", __func__, i, addr, sg_len, sg_len, dma_ch);
++		while (sg_len) {
++			if (unlikely(idx >= SATA_DWC_DMAC_LLI_NUM)) { /* The LLI table is not large enough. */
++				dev_err(qc->ap->dev, "LLI table overrun (idx=%d)\n", idx);
++				break;
++			}
++			//if (dir == DMA_FROM_DEVICE) 
++			//len = (sg_len > SATA_DWC_DMAC_CTRL_TSIZE_MAX) ? SATA_DWC_DMAC_CTRL_TSIZE_MAX : sg_len;
++				//len = (sg_len > DMA_BLOCK_SIZE*4) ? DMA_BLOCK_SIZE*4 : sg_len;		//Read
++			//else 
++			len = (sg_len > DMA_BLOCK_SIZE) ? DMA_BLOCK_SIZE : sg_len;			//Write
++
++			/* This test is really not needed*/
++			//offset = addr & 0xffff; if ((offset + sg_len) > 0x10000) len = 0x10000 - offset;
++
++			/* Make sure a LLI block is not created that will span a 8K max FIS boundary.
++			 * If the block spans such a FIS boundary, there is a chance that a DMA burst will
++			 * cross that boundary -- this results in an error in the host controller.
++			 * This won't happen if block size is a multiple of burst size. */
++			/*if (unlikely(fis_len + len > 8192)) {
++				dwc_port_vdbg(qc->ap, "SPLITTING: fis_len=%d(0x%x) len=%d(0x%x)\n", fis_len, fis_len, len, len);
++				len = 8192 - fis_len;
++				fis_len = 0;
++			} else fis_len += len;
++			if (fis_len == 8192) fis_len = 0;
++			*/
++			
++			/* Set DMA addresses and lower half of control register based on direction. */
++			dwc_port_vdbg(qc->ap, "sg_len = %d, len = %d\n", sg_len, len);
++
++#define DWC_DEFAULT_CTLLO DMA_CTL_SRC_MSIZE(BURST_LENGTH_ENCODE)| DMA_CTL_DST_MSIZE(BURST_LENGTH_ENCODE)|\
++	DWC_CTLL_SRC_WIDTH(2)| DWC_CTLL_DST_WIDTH(2)| DWC_CTLL_LLP_D_EN| DWC_CTLL_LLP_D_EN
++	// DMA_CTL_INT_EN| 
++
++#if defined(CONFIG_APM821xx)
++			if (dir == DMA_FROM_DEVICE) {
++				static const u32 const ctl[2] = { 
++					DWC_DEFAULT_CTLLO| DWC_CTLL_SRC_FIX| DWC_CTLL_DST_INC| DWC_CTLL_FC_P2M| // DMA Channel 0
++					DWC_CTLL_SMS(1)| DWC_CTLL_DMS(0),	// Src: Master2, Dest: S1 Master1
++					DWC_DEFAULT_CTLLO| DWC_CTLL_SRC_FIX| DWC_CTLL_DST_INC| DWC_CTLL_FC_P2M| // DMA Channel 1
++					DWC_CTLL_SMS(2)| DWC_CTLL_DMS(0)	// Src:Master3, Dest: S1 Master1
++				};
++				lli[idx].dar = cpu_to_le32(addr);
++				lli[idx].sar = cpu_to_le32((u32)dmadr);
++				lli[idx].ctl.low = cpu_to_le32(ctl[dma_ch]);
++			} else {	// DMA_TO_DEVICE
++				static const u32 const ctl[2] = { 
++					DWC_DEFAULT_CTLLO| DWC_CTLL_DST_FIX| DWC_CTLL_SRC_INC| DWC_CTLL_FC_P2P|	// DMA Channel 0
++					DWC_CTLL_SMS(0)| DWC_CTLL_DMS(1),	// Src: S1, Dest: M2	
++					DWC_DEFAULT_CTLLO| DWC_CTLL_DST_FIX| DWC_CTLL_SRC_INC| DWC_CTLL_FC_P2P|	// DMA Channel 1
++					DWC_CTLL_SMS(0) | DWC_CTLL_DMS(2) 	// Src: S1, Dest: M3
++				};
++ 				lli[idx].sar = cpu_to_le32(addr);
++				lli[idx].dar = cpu_to_le32((u32)dmadr);
++				lli[idx].ctl.low = cpu_to_le32(ctl[dma_ch]);
++			}
++#else
++			if (dir == DMA_FROM_DEVICE) {
++				lli[idx].dar = cpu_to_le32(addr);
++				lli[idx].sar = cpu_to_le32((u32)dmadr);
++				lli[idx].ctl.low = cpu_to_le32(DWC_DEFAULT_CTLLO| DWC_CTLL_FC_P2M| DWC_CTLL_SRC_FIX| 
++					DWC_CTLL_SMS(0)| DWC_CTLL_DMS(1);
++			} else {	// DMA_TO_DEVICE
++				lli[idx].sar = cpu_to_le32(addr);
++				lli[idx].dar = cpu_to_le32((u32)dmadr);
++				lli[idx].ctl.low = cpu_to_le32(DWC_DEFAULT_CTLLO| DWC_CTLL_FC_P2P)| DWC_CTLL_DST_FIX|
++					DWC_CTLL_SMS(1)| DWC_CTLL_DMS(0);
++			}
++#endif
++			dwc_port_vdbg(qc->ap, "%s: len:0x%08x ctl.high=0x%04x ctl.low=0x%04x\n",
++				__func__, len, DMA_CTL_BLK_TS(len>>2), lli[idx].ctl.low);
++
++			lli[idx].ctl.high = cpu_to_le32(DMA_CTL_BLK_TS(len>>2));   // Block transfer size in 32 bit words
++
++			/* Program the next pointer which must be the physical address, not the virtual address. */
++			next_llp = (dma_lli + ((idx + 1) * sizeof(struct lli)));
++
++			/* The last 2 bits encode the list master select. */
++#if defined(CONFIG_APM821xx)
++			lli[idx].llp = cpu_to_le32(DMA_LLP_LMS(next_llp, DMA_LLP_AHBMASTER1));
++#else
++			lli[idx].llp = cpu_to_le32(DMA_LLP_LMS(next_llp, DMA_LLP_AHBMASTER2));
++#endif
++			print_dma_config_vdbg(qc->ap, &lli[idx], idx);
++			idx++;
++			sg_len -= len;
++			addr += len;
++		}
++	}
++
++	/* The last next ptr has to be zero and the last control low register has to have LLP_SRC_EN and LLP_DST_EN
++	 * (linked list pointer source and destination enable) set back to 0 (disabled.)  This is what tells
++	 * the core that this is the last item in the linked list. */
++	lli[idx-1].llp = 0x00000000;
++	lli[idx-1].ctl.low &= DWC_CTLL_LLP_CLR_LE32;	// Let core know this is the last block
++	lli[idx-1].ctl.low |= DWC_CTLL_INT_EN_LE32;		// Trigger interrupt after last block
++	dma_cache_sync(NULL, lli, (sizeof(struct lli) * idx), DMA_BIDIRECTIONAL);	// Flush cache to memory
++
++	dwc_port_vdbg(qc->ap, "%s: final index:%d fix ctl.low:0x%08x llp:0x%08x\n",
++		__func__, idx-1, lli[idx-1].ctl.low, lli[idx-1].llp);
++	return idx;
++}
++
++/* Check if the selected DMA channel is currently enabled = busy */
++#define DMA_DWC_CHANNEL_BUSY(ch)((in_le32(&sata_dma_regs->dma_chan_en.low) & DMA_CHANNEL(ch)) ? 1 : 0)
++/*
++static __always_inline int dma_dwc_channel_busy(int ch) {
++	u32 dma_chan = in_le32(IOMEM(&sata_dma_regs->dma_chan_en.low));	// Read the DMA channel register
++	return (unlikely(dma_chan & DMA_CHANNEL(ch))) ? 1 : 0; // busy/available
++}
++*/
++
++/* Terminate the current DMA transaction abnormally if it is currently enabled
++ * If it is currently disable, do nothing. */
++static void dma_dwc_terminate_dma(struct ata_port *ap, int dma_ch) {
++	u32 __iomem *chan_enp = &(sata_dma_regs->dma_chan_en.low); //DMA channel enable register
++	int busy = in_le32(chan_enp) & DMA_CHANNEL(dma_ch);
++	if (busy)  {
++		u32 cfg, __iomem *chan_cfgp;
++		dev_info(ap->dev, "%s: Terminate DMA on channel=%d chan_en=0x%08x\n", __func__, dma_ch, in_le32(chan_enp));
++
++		// 1. Set the AHBDMA0_CFG0_L[CH_SUSP] bit to tell the SATA DMA to halt all transfers
++		chan_cfgp = &(sata_dma_regs->chan_regs[dma_ch].cfg.low);
++		out_le32(chan_cfgp, in_le32(chan_cfgp) | 0x100);
++
++		// 2. Poll the AHBDMA0_CFG0_L[FIFO_EMPTY] bit until it indicates that the channel FIFO is empty
++		do {
++			cfg = in_le32(chan_cfgp);
++			dwc_port_dbg(ap, "Polling the AHBDMA0_CFG0_L register (cfg.low=0x%08x)\n", cfg);
++			ndelay(100);
++		} while ((cfg & 0x200) == 0);	
++
++		// 3. Set the write enable bit and clear the channel enable register
++		chan_enp = &(sata_dma_regs->dma_chan_en.low); //DMA channel register pointer
++		out_le32(IOMEM(chan_enp), in_le32(IOMEM(chan_enp)) | DMA_DISABLE_CHAN(dma_ch));
++		
++		do { // 4. Wait for the channel is disabled/free
++			busy = in_le32(chan_enp) & DMA_CHANNEL(dma_ch);
++			dwc_port_info(ap, "%s: In the busy while loop, chan_en=0x%08x\n",__func__, busy);
++			msleep(10); //ndelay(100);
++		} while (busy);
++	}
++}
++
++/* Configure DMA channel registers ready for data transfer */
++static __always_inline void dma_xfer_setup(int dma_ch, dma_addr_t dma_lli) {
++	register struct dmaChanRegs __iomem *reg = &(sata_dma_regs->chan_regs[dma_ch]);
++	// PROTCTL=3 indicates a non-cached (0), buffered (1), privileged data access (1)
++	const int const cfg[] = {DWC_CFGH_SRC_PER(0)| DWC_CFGH_DST_PER(0)| DWC_CFGH_PROTCTL(3)| DWC_CFGH_FCMODE, 
++						DWC_CFGH_SRC_PER(1)| DWC_CFGH_DST_PER(1)| DWC_CFGH_PROTCTL(3)| DWC_CFGH_FCMODE};
++	//const int const cfg[] = {DWC_CFGH_SRC_PER(0)| DWC_CFGH_DST_PER(0)| DWC_CFGH_PROTCTL(3)| DWC_CFGH_FIFO_MODE, 
++	//DWC_CFGH_SRC_PER(1)| DWC_CFGH_DST_PER(1)| DWC_CFGH_PROTCTL(3)| DWC_CFGH_FIFO_MODE};
++
++	clear_chan_interrupts(dma_ch);		//Clear channel interrupts
++	/* Program the CFG register and address of the linked list */
++#if defined(CONFIG_APM821xx)
++	out_le32(&reg->cfg.high, cfg[dma_ch]);				//Buffer mode enabled, FIFO_MODE=0
++	out_le32(&reg->cfg.low, DWC_CFGL_CH_PRIOR(1));		//Channel 1 priority - 0x00000020
++	out_le32(&reg->llp.low, DMA_LLP_LMS(dma_lli, DMA_LLP_AHBMASTER1));
++#else
++	out_le32(&reg->cfg.high, DWC_CFGH_PROTCTL(3) | DWC_CFGH_FCMODE);
++	out_le32(&reg->cfg.low, DWC_CFGL_CH_PRIOR(0));
++	out_le32(&reg->llp.low, DMA_LLP_LMS(dma_lli, DMA_LLP_AHBMASTER2));
++#endif
++	out_le32(&reg->ctl.low, DWC_CTLL_LLP_D_EN | DWC_CTLL_LLP_S_EN);	// Src & Dst enabled: 0x18000000
++	//out_le32(&reg->ctl.high, 0);	// DIFF
++}
++
++/* This function exits the SATA DMA driver */
++static __always_inline void dma_exit(struct sata_dwc_device *hsdev) {
++	dwc_dev_vdbg(hsdev->dev, "%s:\n", __func__);
++	if (sata_dma_regs) iounmap(sata_dma_regs);
++	if (hsdev->irq_dma) free_irq(hsdev->irq_dma, hsdev);
++}
++
++/* This function initializes the SATA DMA driver */
++static __always_inline int dma_init(struct sata_dwc_device *hsdev) {
++	int irq = hsdev->irq_dma;
++	int err = dma_request_interrupts(hsdev, irq);
++	if (unlikely(err)) {
++		dev_err(hsdev->dev, "%s: dma_request_interrupts returns %d\n",__func__, err);
++		dma_exit(hsdev);
++		return err;
++	}
++	out_le32(&(sata_dma_regs->dma_cfg.low), DW_CFG_DMA_EN);	// Enable SATA DMA
++	dev_notice(hsdev->dev, "DMA initialized\n");
++	dev_notice(hsdev->dev, "DMA CFG = 0x%08x\n", in_le32(&(sata_dma_regs->dma_cfg.low)));
++	dwc_dev_vdbg(hsdev->dev, "SATA DMA registers=0x%p\n", sata_dma_regs);
++	return 0;
++}
++
++static void sata_dwc_dev_config(struct ata_device *adev) {
++	// Does not support NCQ over a port multiplier (no FIS-based switching)
++	if (adev->flags & ATA_DFLAG_NCQ) {  // Disk with NCQ capability
++#ifdef SATA_DWC_NCQ
++		if (sata_pmp_attached(adev->link->ap)) {
++			adev->flags &= ~ATA_DFLAG_NCQ;
++			ata_dev_printk(adev, KERN_INFO,	"NCQ disabled: not supported over PMP\n");
++		}
++#else
++		adev->flags &= ~ATA_DFLAG_NCQ;  // Disable NCQ
++		ata_dev_printk(adev, KERN_INFO,	"NCQ disabled for command-based switching\n");
++#endif
++	}
++	/* Since the sata_pmp_error_handler function in libata-pmp make FLAG_AN disabled
++	 * in the first time SATA port configured. Asynchronous notification is not configured */
++	adev->flags |= ATA_DFLAG_AN;
++}
++
++/* Clear content of the SERROR register */
++#define CLEAR_SERROR(hsdev) out_le32((void __iomem *)hsdev->scr_base+4, in_le32((void __iomem *)hsdev->scr_base+4));
++static __always_inline void clear_serror(struct sata_dwc_device *hsdev) {
++	//out_le32((void __iomem *)hsdev->scr_base + 4, in_le32((void __iomem *)hsdev->scr_base + 4));
++	SATA_DWC_CORE_SCR_WRITE(hsdev, SCR_ERROR, SATA_DWC_CORE_SCR_READ(hsdev, SCR_ERROR));
++}
++
++/* To clear a bit int INTPR register, the value written to clear set bits should have ones encoded 
++   in the bit positions corresponding to the bits that are to be cleared */
++#define CLEAR_INTPR(regs) out_le32(&regs->intpr, in_le32(&regs->intpr))
++#define CLEAR_INTPR_BIT(regs, bit) out_le32(&regs->intpr, (bit))
++/*
++static __always_inline void clear_interrupt_bit(struct sata_dwc_device __iomem *hsdev, u32 bit) {
++	out_le32(&hsdev->sata_dwc_regs->intpr, bit); // in_le32(&hsdev->sata_dwc_regs->intpr));
++}
++
++static __always_inline void clear_intpr(struct sata_dwc_regs __iomem *dwc_regs) {
++	out_le32(&dwc_regs->intpr, in_le32(&dwc_regs->intpr));
++}
++*/
++
++/* Timer to monitor SCR_NOTIFICATION registers on the SATA port.
++ * This is enabled only when the SATA PMP card is plugged into the SATA port. */
++static void sata_dwc_an_chk(unsigned long arg) {
++	register struct ata_port *ap = (void *)arg;
++	struct sata_dwc_device_port *hsdevp = HSDEVP_FROM_AP(ap);
++	struct sata_dwc_device *hsdev = HSDEV_FROM_HSDEVP(hsdevp);
++	unsigned long flags;
++	int rc = 0x0;
++	u32 sntf = 0x0;
++
++	if (unlikely(!sata_pmp_attached(ap)))  {
++		ata_port_printk(ap, KERN_INFO, "Maximum qc->tag in 10 seconds: %d\n", hsdevp->max_tag);
++		hsdevp->max_tag = 0;
++		hsdev->an_timer.expires = jiffies + msecs_to_jiffies(10000);
++		add_timer(&hsdev->an_timer);
++		return;
++	}
++	spin_lock_irqsave(ap->lock, flags);
++	rc = sata_scr_read(&ap->link, SCR_NOTIFICATION, &sntf);
++
++	// If some changes on the SCR4, call asynchronous notification
++	if ((rc == 0) & (sntf != 0)) {
++		dwc_port_dbg(ap, "Call assynchronous notification sntf=0x%08x\n", sntf);
++		sata_async_notification(ap);
++		hsdev->an_timer.expires = jiffies + msecs_to_jiffies(8000);
++	} else hsdev->an_timer.expires = jiffies + msecs_to_jiffies(3000);
++
++	add_timer(&hsdev->an_timer);
++	spin_unlock_irqrestore(ap->lock, flags);
++}
++
++
++/*   sata_dwc_pmp_select - Set the PMP field in SControl to the specified port number.
++ *   @port: The value (port number) to set the PMP field to.
++ *   @return: The old value of the PMP field. */
++static u32 sata_dwc_pmp_select(struct ata_port *ap, u32 port) {
++	struct sata_dwc_device *hsdev = HSDEV_FROM_AP(ap);
++	u32 scontrol, old_port;
++	if (sata_pmp_supported(ap)) {
++		scontrol = SATA_DWC_CORE_SCR_READ(hsdev, SCR_CONTROL);
++		old_port = SCONTROL_TO_PMP(scontrol);
++		
++		if (port != old_port)  {	// Select new PMP port
++			scontrol &= ~SCONTROL_PMP_MASK;
++			SATA_DWC_CORE_SCR_WRITE(hsdev, SCR_CONTROL, scontrol | PMP_TO_SCONTROL(port));
++			dwc_port_dbg(ap, "%s: old port=%d new port=%d\n", __func__, old_port, port);
++		}
++		return old_port;
++	} else return port;
++}
++
++/* Get the current PMP port */
++static inline u32 current_pmp(struct ata_port *ap) {
++	return SCONTROL_TO_PMP(SATA_DWC_CORE_SCR_READ(HSDEV_FROM_AP(ap), SCR_CONTROL));
++}
++
++
++/* Process when a PMP card is attached in the SATA port */
++static void sata_dwc_pmp_attach (struct ata_port *ap) {
++	struct sata_dwc_device *hsdev = HSDEV_FROM_AP(ap);
++
++	dev_info(ap->dev, "Attach SATA port multiplier with %d ports\n", ap->nr_pmp_links);
++	ap->flags &= ~ATA_FLAG_NCQ;   	// Disable NCQ, SATA port support command base switching only
++	init_timer(&hsdev->an_timer);		// Initialize timer for checking AN
++	hsdev->an_timer.expires = jiffies + msecs_to_jiffies(20000);
++	hsdev->an_timer.function = sata_dwc_an_chk;
++	hsdev->an_timer.data = (unsigned long)(ap);
++	add_timer(&hsdev->an_timer);
++}
++
++/* Process when PMP card is removed from the SATA port */
++static void sata_dwc_pmp_detach ( struct ata_port *ap) {
++	struct sata_dwc_device *hsdev = HSDEV_FROM_AP(ap);
++
++	dev_info(ap->dev, "Detach SATA port\n");
++#ifdef SATA_DWC_NCQ
++	ap->flags |= ATA_FLAG_NCQ;	// Re-enable NCQ
++#endif
++	sata_dwc_pmp_select(ap, 0);
++	del_timer(&hsdev->an_timer);	// Delete timer since PMP card is detached
++}
++
++/* Check for link ready */
++int __always_inline sata_dwc_check_ready (struct ata_link *link ) {
++	return ata_check_ready(SATA_DWC_CHECK_STATUS(link->ap));
++}
++
++
++/* Do soft reset on the current SATA link. */
++static int sata_dwc_softreset(struct ata_link *link, unsigned int *classes,	unsigned long deadline) {
++	int rc;
++	struct ata_port *ap = link->ap;
++	struct ata_ioports *ioaddr = &ap->ioaddr;
++	struct ata_taskfile tf;
++
++	sata_dwc_pmp_select(ap, sata_srst_pmp(link));
++	iowrite8(ap->ctl, ioaddr->ctl_addr);	// Issue bus reset/
++	udelay(20);								// FIXME: flush
++	iowrite8(ap->ctl | ATA_SRST, ioaddr->ctl_addr);
++	udelay(20);								// FIXME: flush
++	iowrite8(ap->ctl, ioaddr->ctl_addr);
++	ap->last_ctl = ap->ctl;
++
++	/* Always check readiness of the master device */
++	rc = ata_wait_after_reset(link, deadline, sata_dwc_check_ready);
++
++	*classes = ATA_DEV_NONE;			// Classify the ata_port
++	if (ata_link_online(link)) {		// Verify if SStatus indicates device presence
++		memset(&tf, 0, sizeof(tf));
++		ata_sff_tf_read(ap, &tf);
++		*classes = ata_dev_classify(&tf);
++	}
++	if ( *classes == ATA_DEV_PMP) dwc_link_dbg(link, "-->found PMP device by sig\n");
++
++	CLEAR_SERROR(HSDEV_FROM_AP(ap));
++	return rc;
++}
++
++/* Set default parameters for SATA Drivers, called each time hard reset is executed. */
++static __always_inline void sata_dwc_default_params (struct sata_dwc_device_port *hsdevp) {
++	int i;
++
++	hsdevp->sactive_issued = hsdevp->sactive_queued = 0;
++	hsdevp->dma_complete = hsdevp->no_dma_pending = 0;
++	for (i = 0; i < SATA_DWC_QCMD_MAX; i++) {
++		hsdevp->cmd_issued[i] = SATA_DWC_CMD_ISSUED_NOT;
++		hsdevp->dma_pending[i] = SATA_DWC_DMA_PENDING_NONE;
++	}
++}
++
++/* Do hard-reset the SATA controller */
++static int sata_dwc_hardreset(struct ata_link *link, unsigned int *classes, unsigned long deadline) {
++	int rc;
++	const unsigned long *timing = sata_ehc_deb_timing(&link->eh_context);
++	register struct ata_port *ap = link->ap;
++	struct sata_dwc_device_port *hsdevp = HSDEVP_FROM_AP(ap);
++	struct sata_dwc_device *hsdev = HSDEV_FROM_HSDEVP(hsdevp);
++	bool online;
++
++	dwc_link_dbg(link, "%s: dmacr=0x%08x\n", __func__, in_le32(&hsdev->sata_dwc_regs->dmacr));
++	sata_dwc_pmp_select(ap, sata_srst_pmp(link));
++
++	dma_dwc_terminate_dma(ap, hsdev->dma_channel); // Terminate DMA channel if it is currently enabled
++	rc = sata_link_hardreset(link, timing, deadline, &online, NULL); // Call standard hard reset
++	
++	if (ata_link_online(link)) sata_dwc_init_port(ap); // Reconfigure the port after hard reset
++	link->active_tag = ATA_TAG_POISON;
++	sata_dwc_default_params(hsdevp); 	// Reset parameters
++	dwc_printk_vdbg("DMA Interrupt Mask = 0x%08x", in_le32(&sata_dma_regs->interrupt_mask.tfr.low));
++	return online ? -EAGAIN : rc;
++}
++
++
++/* Do hard reset on each PMP link */
++static int sata_dwc_pmp_hardreset(struct ata_link *link, unsigned int *classes, unsigned long deadline) {
++	sata_dwc_pmp_select(link->ap, sata_srst_pmp(link));
++	return sata_std_hardreset(link, classes, deadline);
++}
++
++/* See ahci.c: Process error when the SATAn_INTPR's ERR bit is set
++ * The processing is based on SCR_ERROR register content */
++static __always_inline void sata_dwc_error_intr(struct ata_port *ap, struct sata_dwc_device *hsdev, uint intpr) {
++	struct sata_dwc_device_port *hsdevp = HSDEVP_FROM_AP(ap);
++	struct ata_link *link = &ap->link;
++	struct ata_eh_info *ehi = &link->eh_info;
++	struct ata_queued_cmd *active_qc = NULL;
++	u32 serror, err_mask = 0, action = 0;
++	bool freeze = false, abort = false;
++	int pmp, ret;
++	u8 tag = link->active_tag, status = SATA_DWC_CHECK_STATUS(ap);
++
++	ata_ehi_clear_desc(ehi); 	// Record irq stat
++	//ata_ehi_push_desc(ehi, "irq_stat 0x%08x", intpr);  //DIFF
++	serror = SATA_DWC_CORE_SCR_READ(hsdev, SCR_ERROR);	// SError register
++	dev_err(ap->dev, "%s: scr_error=0x%08x intpr=0x%08x status=0x%08x pending=%d issued=%d",
++		__func__, serror, intpr, status, hsdevp->dma_pending[tag], hsdevp->cmd_issued[tag]);
++
++	CLEAR_SERROR(hsdev);		// Clear error register and interrupt bit
++	// ERR bit can only be cleared by clearing serror reg or masked with the SATAn_ERRMR
++	CLEAR_INTPR(hsdev->sata_dwc_regs); 	//DIFF
++
++	// Print content of SERROR in case of error detected
++	if (serror) print_serror2txt(serror);
++	print_dma_registers_vdbg(hsdev);
++
++	// Process hot-plug for SATA port
++	if (serror & (SATA_DWC_SERR_DIAGX | SATA_DWC_SERR_DIAGW)) {
++		dwc_port_info(ap, "Detect hot plug signal\n");
++		ata_ehi_hotplugged(ehi);
++		ata_ehi_push_desc(ehi, serror & SATA_DWC_SERR_DIAGN ? "PHY RDY changed" : "device exchanged");
++		freeze = true;
++	}
++
++	// Process PHY internal error / Link sequence (illegal transition) error
++	if (serror & (SATA_DWC_SERR_DIAGI | SATA_DWC_SERR_DIAGL)) {
++		ehi->err_mask |= AC_ERR_HSM;
++		ehi->action |= ATA_EH_RESET;
++		freeze = true;
++	}
++
++	// Process Internal host adapter error
++	if (serror & SATA_DWC_SERR_ERRE) {
++		dev_err(ap->dev, "Detect Internal host adapter error\n");
++		// --> need to review
++		ehi->err_mask |= AC_ERR_HOST_BUS;
++		ehi->action |= ATA_EH_RESET;
++		freeze = true;
++	}
++
++	// Process Protocol Error
++	if (serror & SATA_DWC_SERR_ERRP) {
++		dev_err(ap->dev, "Detect Protocol error\n");
++		ehi->err_mask |= AC_ERR_HSM;
++		ehi->action |= ATA_EH_RESET;
++		freeze = true;
++	}
++
++	// Process non-recovered persistent communication error
++	if (serror & SATA_DWC_SERR_ERRC) {
++		dev_err(ap->dev, "Detect non-recovered persistent communication error\n");
++		// --> TODO: review processing error
++		ehi->err_mask |= AC_ERR_ATA_BUS;
++		ehi->action |= ATA_EH_SOFTRESET;
++		//ehi->flags |= ATA_EHI_NO_AUTOPSY;
++		//freeze = true;
++	}
++
++	// Non-recovered transient data integrity error
++	if (serror & SATA_DWC_SERR_ERRT) {
++		dev_err(ap->dev, "Detect non-recovered transient data integrity error\n");
++		ehi->err_mask |= AC_ERR_ATA_BUS;
++		//ehi->err_mask |= AC_ERR_DEV;
++		ehi->action |= ATA_EH_SOFTRESET;
++		//ehi->flags |= ATA_EHI_NO_AUTOPSY;
++	}
++
++	// Since below errors have been recovered by hardware
++	// they don't need any error processing.
++	if (serror & SATA_DWC_SERR_ERRM)
++		dev_warn(ap->dev, "Detect recovered communication error");
++	if (serror & SATA_DWC_SERR_ERRI)
++		dev_warn(ap->dev, "Detect recovered data integrity error");
++
++	// If any error occur, process the qc
++	if (serror & (SATA_DWC_SERR_ERRT | SATA_DWC_SERR_ERRC)) {
++		abort = true;
++		if (sata_pmp_attached(ap)) { 		// find out the offending link and qc
++			pmp = current_pmp(ap);
++			if (pmp < ap->nr_pmp_links) {	// If we are working on the PMP port
++				link = &ap->pmp_link[pmp];
++				ehi = &link->eh_info;
++				active_qc = ata_qc_from_tag(ap, link->active_tag);
++				err_mask |= AC_ERR_DEV;
++				ata_ehi_clear_desc(ehi);
++				ata_ehi_push_desc(ehi, "irq_stat:%p", &irq_stat); /*0x%08x*/
++			} else {
++				err_mask |= AC_ERR_HSM;
++				action |= ATA_EH_RESET;
++				freeze = true;
++			}
++		} else { // // Work on SATA port
++			freeze = true;
++			active_qc = ata_qc_from_tag(ap, link->active_tag);
++		}
++
++		if (active_qc) active_qc->err_mask |= err_mask;
++		else ehi->err_mask = err_mask;
++	}
++
++	if (freeze | abort) {	// Terminate DMA channel if it is currently in use
++		int dma_chan = hsdev->dma_channel;
++		if ((DMA_REQUEST_CHANNEL(dma_chan)) != -1) {
++			dwc_port_dbg(ap, "Terminate DMA channel %d for handling error\n", dma_chan);
++			dma_dwc_terminate_dma(ap, dma_chan);
++		}
++	}
++
++	if (freeze) {
++		ret = ata_port_freeze(ap);
++		ata_port_printk(ap, KERN_INFO, "Freeze port with %d QCs aborted\n", ret);
++	} else if (abort) {
++		if (active_qc) {
++			ret = ata_link_abort(active_qc->dev->link);
++			ata_link_printk(link, KERN_INFO, "Abort %d QCs\n", ret);
++		} else {
++			ret = ata_port_abort(ap);
++			ata_port_printk(ap, KERN_INFO, "Abort %d QCs on the SATA port\n", ret);
++		}
++	}
++}
++
++static __always_inline void sata_dwc_qc_complete(struct ata_port *ap, struct ata_queued_cmd *qc, u8 tag, u32 check_status) {
++	struct sata_dwc_device_port *hsdevp = HSDEVP_FROM_AP(ap);
++	struct sata_dwc_device *hsdev = HSDEV_FROM_HSDEVP(hsdevp);
++	u8 status = 0; //, tag = qc->tag;
++	int num_lli, dma_pending = hsdevp->dma_pending[tag], i = 0;
++	u32 serror, mask = 0x0;
++	struct lli *llit;
++
++	dwc_port_dbg(ap, "%s: Check status=%s tag=%d\n", __func__, check_status?"yes":"no", tag);
++	if (unlikely(dma_pending == SATA_DWC_DMA_PENDING_TX))
++		dev_err(ap->dev, "%s: ERROR - TX DMA PENDING - tag=%d\n", __func__, tag);
++	else if (unlikely(dma_pending == SATA_DWC_DMA_PENDING_RX))
++		dev_err(ap->dev, "%s: ERROR - RX DMA PENDING - tag=%d\n", __func__, tag);
++
++	if (check_status) {
++		status = SATA_DWC_CHECK_STATUS(ap);
++		while (unlikely(status & ATA_BUSY)) { // check main status, clearing INTRQ
++			if (++i > 20) {
++				dev_err(ap->dev, "QC complete cmd=0x%02x STATUS BUSY (0x%02x)[%d]\n", qc->tf.command, status, i);
++				break;
++			}
++			udelay(400);
++			status = SATA_DWC_CHECK_STATUS(ap);
++		}
++
++		serror = SATA_DWC_CORE_SCR_READ(hsdev, SCR_ERROR);
++		if (unlikely(serror & SATA_DWC_SERR_ERR_BITS)) { // need to process error here (ADDED)
++			dev_err(ap->dev, "****** serror=0x%08x ******\n", serror);
++			ap->link.eh_context.i.action |= ATA_EH_RESET;
++			dma_dwc_terminate_dma(ap, hsdev->dma_channel);
++		}
++	}
++	dwc_port_dbg(ap, "%s: QC complete cmd=%s status=0x%02x ata%u: protocol=%s\n",
++		__func__, cmd2txt(&qc->tf), status, ap->print_id, prot2txt(qc->tf.protocol));
++
++	mask = ~TAG2MASK(tag);
++	hsdevp->sactive_queued	&= mask; 	// No more SATA command queued for this tag
++	hsdevp->sactive_issued	&= mask;	// No SATA command issued
++
++	// DIFF - these 3 lines are not in 460ex
++	hsdevp->dma_complete	&= mask;	// DMA complete for this tag
++	hsdevp->dma_pending[tag] = SATA_DWC_DMA_PENDING_NONE;
++	hsdevp->cmd_issued[tag]	 = SATA_DWC_CMD_ISSUED_NOT;
++
++	/* Clear lli structure */
++	// DIFF nothing cleared in 460ex
++	llit = hsdevp->llit[tag];
++	num_lli = hsdevp->num_lli[tag];
++	for(i=0; i < num_lli; i++) llit[i].llp = 0;
++	hsdevp->num_lli[tag] = 0;
++
++	dwc_port_vdbg(ap, "%s - sactive_queued=0x%08x, sactive_issued=0x%08x\n",__func__, hsdevp->sactive_queued, hsdevp->sactive_issued);
++	dwc_port_vdbg(ap, "dmacr=0x%08x\n",in_le32(&(hsdev->sata_dwc_regs->dmacr)));
++	print_dma_registers_vdbg(hsdev);
++	/* Complete taskfile transaction (does not read SCR registers) */
++	ata_qc_complete(qc);
++}
++
++/* Main interrupt handler, called when any command completes (DMA, PIO, nodata)
++ * Each DMA transaction produces 2 interrupts: the DMAC transfer complete interrupt and
++ * the SATA controller operation done interrupt. 
++ * This Interrupt handler called via port ops registered function: .irq_handler = sata_dwc_isr */
++static irqreturn_t sata_dwc_isr(int irq, void *dev_instance) {
++	struct ata_host *host = (struct ata_host *)dev_instance;
++	register struct sata_dwc_device *hsdev = HSDEV_FROM_HOST(host);
++	struct sata_dwc_regs __iomem *dwc_regs = hsdev->sata_dwc_regs;
++	struct ata_port *ap = host->ports[0];
++	register struct sata_dwc_device_port *hsdevp = HSDEVP_FROM_AP(ap);
++	struct ata_queued_cmd *qc;
++	u32 intpr, sactive, tag_mask; //sactive2, mask
++	unsigned long flags;
++	u8 status = 0, tag;
++
++	spin_lock_irqsave(&host->lock, flags);
++	intpr = in_le32(&dwc_regs->intpr);  /* Read the interrupt register */
++	dwc_port_dbg(ap,"%s: link.active_tag=%d intpr=0x%08x sactive_issued=0x%08x dma_complete=0x%08x no_dma_pending=%d\n",
++		__func__, ap->link.active_tag, intpr, hsdevp->sactive_issued, hsdevp->dma_complete, hsdevp->no_dma_pending);
++	/* Check for error interrupt */
++	if (unlikely(intpr & SATA_DWC_INTPR_ERR)) {
++		sata_dwc_error_intr(ap, hsdev, intpr);
++#if defined(CONFIG_APOLLO3G) //&& defined(DWC_DEBUG)
++//	signal_hdd_led(0 /*off blink*/, 1 /* _3G_LED_RED, red color*/);
++	signal_hdd_led(_3G_BLINK_NO, _3G_LED_RED);
++#endif
++		goto done_irqrestore;
++	}
++
++	/* For NCQ commands, an interrupt with NEWFP bit set is issued (step 5 of the First Party DMA transfer) */
++	/* Check for DMA SETUP FIS (FP DMA) interrupt */
++	if (intpr & SATA_DWC_INTPR_NEWFP) {
++		//CLEAR_INTPR_BIT(dwc_regs, SATA_DWC_INTPR_NEWFP); //Clear NEWFP Interrupt by writing a 1
++		out_le32(&dwc_regs->intpr, SATA_DWC_INTPR_NEWFP); //Clear NEWFP Interrupt by writing a 1
++		tag = (u8)(in_le32(&dwc_regs->fptagr));		// Read the FPTAGR register for the NCQ tag
++		ap->link.active_tag = tag;		// Setting this prevents more QCs to be queued
++		dwc_port_dbg(ap, "%s: NEWFP interrupt (intpr=0x%08x), fptagr=%d, fpbor=0x%08x\n",
++			__func__, intpr, tag, in_le32(&dwc_regs->fpbor));
++
++		if (unlikely(hsdevp->cmd_issued[tag] != SATA_DWC_CMD_ISSUED_PENDING))
++			dev_warn(ap->dev, "CMD tag=%d not pending?\n", tag);
++
++		hsdevp->sactive_issued |= TAG2MASK(tag);  // Update sactive_issued to indicate a new command issued
++		// Get the QC from the tag (qc = ata_qc_from_tag(ap, tag);)
++		qc = &ap->qcmd[tag];  // we know tag is a valid one
++		if (unlikely(!qc)) {
++			dev_warn(ap->dev, "No QC available for tag %d (intpr=0x%08x, qc_active=0xl%08x)\n", 
++				tag, intpr, ap->qc_active);
++			hsdevp->sactive_issued &= ~TAG2MASK(tag);
++			goto done_irqrestore;
++		}
++
++		/* Start FP DMA for NCQ command.  At this point the tag is the active tag.  
++		  It is the tag that matches the command about to be completed. */
++		sata_dwc_bmdma_start_by_tag(qc, tag);
++		ap->hsm_task_state = HSM_ST_LAST;	//DIFF
++		goto done_irqrestore;
++	}
++
++	/* The second interrupt is signalled to indicate the command complete. */
++	sactive = SATA_DWC_CORE_SCR_READ(hsdev, SCR_ACTIVE);
++	tag_mask = (hsdevp->sactive_issued | sactive) ^ sactive; // XOR
++
++	/* If no sactive issued and tag_mask is zero then this is not NCQ */
++	if (unlikely((hsdevp->sactive_issued == 0) && (tag_mask == 0))) { // Complete PIO and internal command queues.
++		u8 proto, dma_pending;
++		//dwc_port_dbg(ap, "Process non-NCQ commands, ap->qc_active=0x%08x, sactive=0x%08x\n",ap->qc_active, sactive);
++		tag = (ap->link.active_tag == ATA_TAG_POISON) ? 0 : ap->link.active_tag;
++		status = SATA_DWC_CHECK_STATUS(ap);		// Call check status to clear BUSY bit
++		qc = &ap->qcmd[tag];   // Get qc from tag (ata_qc_from_tag(ap, tag);)
++		if (unlikely(!qc || (qc->tf.flags & ATA_TFLAG_POLLING))) { // Sata device interrupt w/ no active qc?
++			dev_err(ap->dev, "%s: SATA device intr with no active qc qc=%p\n",	__func__, qc);
++			goto done_irqrestore;
++		}
++
++		if (status & ATA_ERR) {
++			dwc_dev_dbg(ap->dev, "interrupt ATA_ERR (0x%x)\n", status);
++			sata_dwc_qc_complete(ap, qc, tag, 1);
++			goto done_irqrestore;
++		}
++		proto = qc->tf.protocol;
++		dma_pending = hsdevp->dma_pending[tag];
++		dwc_port_dbg(ap, "%s: non-NCQ cmd interrupt ap->qc_active=0x%08x sactive=0x%08x protocol:%s dma_pending[tag]:%d\n", 
++			__func__, ap->qc_active, sactive, prot2txt(proto), dma_pending);
++
++		if (likely(ata_is_dma(proto))) {
++			hsdevp->cmd_issued[tag] = SATA_DWC_CMD_ISSUED_DONE;	// Flag SATA controller intr done
++			if (unlikely(dma_pending == SATA_DWC_DMA_PENDING_NONE)) // DMA out of sync error
++				dev_err(ap->dev, "%s: DMA RX/TX not pending dmacr: 0x%08x intpr=0x%08x status=0x%08x pend=%d\n",
++					__func__, in_le32(IOMEM(&dwc_regs->dmacr)), intpr, status, dma_pending);
++			if (dma_pending == SATA_DWC_DMA_DONE) { // SATA device and DMA intr. are done
++				sata_dwc_qc_complete(ap, qc, tag, 1); // ata_qc_from_tag(ap, tag)
++				ap->link.active_tag = ATA_TAG_POISON;
++			}
++		} else if (ata_is_pio(proto))
++			ata_sff_hsm_move(ap, qc, status, 0);
++		else sata_dwc_qc_complete(ap, qc, tag, 1); // e.g. protocol NO_DATA
++
++		goto done_irqrestore;
++	}
++	/* Process NCQ QC completes - This is a NCQ command. One interrupt may serve as completion for more
++	 * than one operation when commands are queued(NCQ).  We need to process each completed command.
++	 * Each NEWFP command must follow by a DMA interrupt. We clear interrupt only when no DMA transfer pending.
++	 * Since we don't clear interrupt bit, this interrupt will signal again. */
++
++//process_cmd:  // process completed commands 
++	sactive = SATA_DWC_CORE_SCR_READ(hsdev, SCR_ACTIVE);
++	tag_mask = (hsdevp->sactive_issued | sactive) ^ sactive;
++
++	if (hsdevp->no_dma_pending == 0) {
++		status = SATA_DWC_CHECK_STATUS(ap);
++		hsdevp->dma_pending_isr_count = 0;
++	} else {
++		hsdevp->dma_pending_isr_count++;
++		if( hsdevp->dma_pending_isr_count > 10 ) {
++			status = SATA_DWC_CHECK_STATUS(ap); // For test only
++			hsdevp->dma_pending_isr_count=0;
++#ifdef DWC_VDEBUG
++			//tag = (unlikely(ap->link.active_tag == ATA_TAG_POISON)) ? 0 : ap->link.active_tag;
++			printk("%s count exceed 10 times (hsdevp->no_dma_pending=%d, num_lli=%d)\n", 
++				__func__, hsdevp->no_dma_pending, hsdevp->num_lli[tag]);
++			print_dma_registers_vdbg(hsdev);
++			print_dma_config_vdbg(ap, hsdevp->llit[tag], 0);
++#endif
++		}
++		ndelay(pause_dma_pending);
++		//goto done_irqrestore;
++	}
++
++	/* read just to clear ... not bad if currently still busy */
++	//status = ap->ops->sff_check_status(ap);
++	status = SATA_DWC_CHECK_STATUS(ap);	//DIFF
++	dwc_port_dbg(ap, "%s: Process NCQ commands ap->qc_active=0x%08x tagmask=0x%08x dma_complete=0x%08x status=0x%02x hsdevp->dma_pending[tag]=%x tag_mask:%x isr_count:%d\n",
++		__func__, ap->qc_active, tag_mask, hsdevp->dma_complete, status, hsdevp->dma_pending[ap->link.active_tag], tag_mask, hsdevp->dma_pending_isr_count);
++
++	hsdevp->cmd_issued[ap->link.active_tag] = SATA_DWC_CMD_ISSUED_DONE;
++	tag = 31; //tag = 0;
++	//tag_mask = hsdevp->dma_complete;
++	while (tag_mask) {  //if tag_mask is zero then all bits processed
++		while (!(tag_mask & 0x80000000)) { tag--; tag_mask <<= 1; }	//shift through the bits
++		//while (!(tag_mask & 0x00000001)) { tag++; tag_mask >>= 1; }	//shift through the bits
++		qc = &ap->qcmd[tag]; //qc = ata_qc_from_tag(ap, tag);
++/*		
++		if (unlikely(!qc)) {
++			ata_port_printk(ap, KERN_INFO, "Tag %d is set but not available\n", tag);
++			continue;
++		}
++*/
++		qc->ap->link.active_tag = tag;	// To be picked up by completion functions
++		hsdevp->cmd_issued[tag] = SATA_DWC_CMD_ISSUED_DONE;
++		//if (hsdevp->dma_complete & TAG2MASK(tag)) {	
++		if (hsdevp->dma_pending[tag] == SATA_DWC_DMA_DONE) { // We already got the first interrupt
++			dwc_port_dbg(ap, "%s: Execute NCQ qc_complete qc_active=0x%08x dma_complete=0x%08x cmd_issued=%d dma_pending=%d status=0x%02x\n",
++				__func__, ap->qc_active, hsdevp->dma_complete, hsdevp->cmd_issued[tag], hsdevp->dma_pending[tag], status);
++			sata_dwc_qc_complete(ap, qc, tag, 1);
++			ap->link.active_tag = ATA_TAG_POISON;  //DIFF
++		}
++		tag--; tag_mask <<= 1;		//tag++; tag_mask >>= 1;
++	}
++
++	//hsdevp->dma_complete = dma_complete;
++	// Assign active_tag to ATA_TAG_POISON so that the qc_defer not defer new QC.
++	if (hsdevp->no_dma_pending == 0) ap->link.active_tag = ATA_TAG_POISON;
++	/*
++	ndelay(100);
++	sactive2 = SATA_DWC_CORE_SCR_READ(hsdev, SCR_ACTIVE);
++	if (sactive2 != sactive)
++		printk("More completed - sactive=0x%x sactive2=0x%x\n", sactive, sactive2);
++	*/
++
++	//tag_mask = (hsdevp->sactive_issued | sactive) ^ sactive;
++	print_dma_registers_vdbg(hsdev);
++
++done_irqrestore:
++	spin_unlock_irqrestore(&host->lock, flags);
++#if defined(CONFIG_APOLLO3G) //&& defined(DWC_DEBUG)
++//	signal_hdd_led(0 /*off blink*/, -1 /* no color */);
++	signal_hdd_led(_3G_BLINK_NO, _3G_LED_OFF /* no color */);
++#endif
++	return IRQ_RETVAL(1);
++}
++
++/* Clear interrupt and error flags in DMA status register. */
++void sata_dwc_irq_clear (struct ata_port *ap) {
++	struct sata_dwc_device *hsdev = HSDEV_FROM_AP(ap);
++
++	dwc_port_dbg(ap,"%s\n",__func__);
++	clear_chan_interrupts(hsdev->dma_channel);		// Clear DMA interrupts
++	//sata_dma_regs
++	//out_le32(&hsdev->sata_dwc_regs->intmr,
++	//	 in_le32(&hsdev->sata_dwc_regs->intmr) & ~SATA_DWC_INTMR_ERRM);
++	//out_le32(&hsdev->sata_dwc_regs->errmr, 0x0);
++	//sata_dwc_check_status(ap);
++}
++
++/* Turn on IRQ */
++void sata_dwc_irq_on(struct ata_port *ap) {
++	struct ata_ioports *ioaddr = &ap->ioaddr;
++	//register void __iomem* bmdma_addr = ioaddr->bmdma_addr + ATA_DMA_STATUS;
++	struct sata_dwc_device *hsdev = HSDEV_FROM_AP(ap);
++	struct sata_dwc_regs __iomem *dwc_regs = hsdev->sata_dwc_regs;
++	u8 tmp;
++
++	dwc_port_dbg(ap,"%s\n",__func__);
++	ap->ctl &= ~ATA_NIEN;
++	ap->last_ctl = ap->ctl;
++
++	if (ioaddr->ctl_addr) iowrite8(ap->ctl, ioaddr->ctl_addr);
++	tmp = ata_wait_idle(ap);
++
++	//SATA_DWC_IRQ_CLEAR(bmdma_addr);
++	ap->ops->sff_irq_clear(ap);
++	out_le32(&dwc_regs->intmr, in_le32(&dwc_regs->intmr) | SATA_DWC_INTMR_ERRM);
++	out_le32(&dwc_regs->errmr, SATA_DWC_SERR_ERR_BITS);
++}
++
++/* This function enables the interrupts in IMR and unmasks them in ERRMR */
++static __always_inline void sata_dwc_enable_interrupts(struct sata_dwc_regs __iomem *regs) {
++	out_le32(&regs->intmr, SATA_DWC_INTMR_ERRM| SATA_DWC_INTMR_NEWFPM|
++		 SATA_DWC_INTMR_PMABRTM| SATA_DWC_INTMR_DMATM); // Enable interrupts
++	out_le32(&regs->errmr, SATA_DWC_SERR_ERR_BITS);	// Unmask error bits which trigger an error interrupt 
++	dwc_printk_vdbg("%s: INTMR=0x%08x, ERRMR=0x%08x\n", __func__, in_le32(&regs->intmr), in_le32(&regs->errmr));
++}
++
++/* Configure DMA and interrupts on SATA port. This should be called after hardreset is executed on the SATA port */
++static void sata_dwc_init_port (struct ata_port *ap ) {
++	struct sata_dwc_device *hsdev = HSDEV_FROM_AP(ap);
++	struct sata_dwc_regs __iomem *regs = hsdev->sata_dwc_regs;
++
++	if (ap->port_no == 0)  {		// Configure DMA
++		dwc_port_dbg(ap, "%s: clearing TXCHEN, RXCHEN in DMAC\n", __func__);
++		out_le32(&regs->dmacr, SATA_DWC_DMACR_TXRXCH_CLEAR);	// Clear all transmit/receive bits
++		dwc_dev_dbg(ap->dev, "%s: setting burst size in DBTSR\n", __func__);
++		out_le32(&regs->dbtsr, SATA_DWC_DBTSR_MWR(AHB_DMA_BRST_DFLT)| SATA_DWC_DBTSR_MRD(AHB_DMA_BRST_DFLT));
++	}
++	sata_dwc_enable_interrupts(regs);	// Enable interrupts
++}
++
++/* Setup SATA ioport with corresponding register addresses */
++static __always_inline void sata_dwc_setup_port(struct ata_ioports *port, unsigned long base) {
++	port->cmd_addr = (void *)base + 0x00;			// SATAn_CDR0
++	port->data_addr = (void *)base + 0x00;
++	port->error_addr = (void *)base + 0x04;
++	port->feature_addr = (void *)base + 0x04;
++	port->nsect_addr = (void *)base + 0x08;
++	port->lbal_addr = (void *)base + 0x0c;
++	port->lbam_addr = (void *)base + 0x10;
++	port->lbah_addr = (void *)base + 0x14;
++	port->device_addr = (void *)base + 0x18;
++	port->command_addr = (void *)base + 0x1c;
++	port->status_addr = (void *)base + 0x1c;		// SATAn_CDR7
++	port->altstatus_addr = (void *)base + 0x20;		// SATAn_CLR0
++	port->ctl_addr = (void *)base + 0x20;
++}
++
++/* This function allocates the scatter gather LLI table for AHB DMA */
++static int sata_dwc_port_start(struct ata_port *ap) {
++	int err = 0, i;
++	struct sata_dwc_device *hsdev = HSDEV_FROM_AP(ap);
++	struct sata_dwc_device_port *hsdevp = NULL;
++	struct sata_dwc_regs __iomem *regs = hsdev->sata_dwc_regs;
++	struct device *pdev;
++	u32 sstatus;
++
++	dwc_dev_dbg(ap->dev, "%s: port_no=%d\n", __func__, ap->port_no);
++
++	hsdev->host = ap->host;
++	pdev = ap->host->dev;
++	if (!pdev) {
++		dev_err(ap->dev, "%s: no ap->host->dev\n", __func__);
++		err = -ENODEV;
++		goto CLEANUP;
++	}
++
++	hsdevp = kzalloc(sizeof(*hsdevp), GFP_KERNEL);	// Allocate Port Struct
++	if (!hsdevp) {
++		dev_err(ap->dev, "%s: kzalloc failed for hsdevp\n", __func__);
++		err = -ENOMEM;
++		goto CLEANUP;
++	}
++	hsdevp->hsdev = hsdev;
++
++	for (i = 0; i < SATA_DWC_QCMD_MAX; i++)
++		hsdevp->cmd_issued[i] = SATA_DWC_CMD_ISSUED_NOT;
++
++	ap->bmdma_prd = NULL;	/* set these so libata doesn't use them */
++	ap->bmdma_prd_dma = 0;
++
++	/* DMA - Assign scatter gather LLI table. We can't use the libata
++	 * version since it's PRD is IDE PCI specific. */
++	for (i = 0; i < SATA_DWC_QCMD_MAX; i++) {
++		hsdevp->llit[i] = dma_alloc_coherent(pdev,SATA_DWC_DMAC_LLI_TBL_SZ,&(hsdevp->llit_dma[i]),GFP_ATOMIC);
++		if (!hsdevp->llit[i]) {
++			dev_err(ap->dev, "%s: dma_alloc_coherent failed size 0x%x\n", __func__, SATA_DWC_DMAC_LLI_TBL_SZ);
++			err = -ENOMEM;
++			goto CLEANUP_ALLOC;
++		}
++	}
++
++	if (likely(ap->port_no == 0))  {
++		dwc_dev_vdbg(ap->dev, "%s: clearing TXCHEN, RXCHEN in DMAC\n", __func__);
++		out_le32(&regs->dmacr, SATA_DWC_DMACR_TXRXCH_CLEAR);
++		dwc_dev_vdbg(ap->dev, "%s: setting burst size in DBTSR\n", __func__);
++		out_le32(&regs->dbtsr, SATA_DWC_DBTSR_MWR(AHB_DMA_BRST_DFLT)| SATA_DWC_DBTSR_MRD(AHB_DMA_BRST_DFLT));
++		dev_notice(ap->dev, "Setting burst size in DBTSR: 0x%08x\n", in_le32(&regs->dbtsr));
++	}
++
++	CLEAR_SERROR(hsdev);	// Clear any error bits before libata starts issuing commands
++	ap->private_data = hsdevp;
++
++	sstatus = SATA_DWC_CORE_SCR_READ(hsdev, SCR_STATUS); 	// Are we in Gen I or II
++	switch (SATA_DWC_SCR0_SPD_GET(sstatus)) {
++		case 0x0: dev_info(ap->dev, "**** No neg speed (nothing attached?) \n"); break;
++		case 0x1: dev_info(ap->dev, "**** GEN I speed rate negotiated \n");	break;
++		case 0x2: dev_info(ap->dev, "**** GEN II speed rate negotiated \n"); break;
++	}
++	dwc_dev_vdbg(ap->dev, "%s: done\n", __func__);
++	return 0;
++
++	// Initialize timer for checking AN
++/*	init_timer(&hsdev->an_timer);
++	hsdev->an_timer.expires = jiffies + msecs_to_jiffies(20000);
++	hsdev->an_timer.function = sata_dwc_an_chk;
++	hsdev->an_timer.data = (unsigned long)(ap);
++	add_timer(&hsdev->an_timer);
++*/
++CLEANUP_ALLOC:
++	kfree(hsdevp);
++	sata_dwc_port_stop(ap);
++CLEANUP:
++	dwc_dev_vdbg(ap->dev, "%s: fail\n", __func__);
++	return err;
++}
++
++/* Free DMA data structure before stopping a SATA port. */
++static void sata_dwc_port_stop(struct ata_port *ap) {
++	int i;
++	struct sata_dwc_device_port *hsdevp = HSDEVP_FROM_AP(ap);
++	struct sata_dwc_device *hsdev = HSDEV_FROM_HSDEVP(hsdevp);
++	struct device *dev = ap->host->dev;
++	dwc_port_dbg(ap, "%s\n", __func__);
++	if (hsdevp && hsdev) {	// de-allocate LLI table
++		for (i = 0; i < SATA_DWC_QCMD_MAX; i++)
++			dma_free_coherent(dev, SATA_DWC_DMAC_LLI_TBL_SZ, hsdevp->llit[i], hsdevp->llit_dma[i]);
++		kfree(hsdevp);
++	}
++	ap->private_data = NULL;
++}
++
++/* Since the SATA DWC is master only. The dev select operation will be removed. So, this function will do nothing */
++void sata_dwc_dev_select(struct ata_port *ap, unsigned int device) {
++	// Do nothing
++	ndelay(100);
++}
++
++/* This function keeps track of individual command tag ids and calls ata_exec_command in libata */
++static __always_inline void sata_dwc_exec_command_by_tag(struct ata_port *ap, 
++	struct ata_taskfile *tf, u8 tag, u32 cmd_issued) {
++	unsigned long flags;
++	struct sata_dwc_device_port *hsdevp = HSDEVP_FROM_AP(ap);
++	struct sata_dwc_device *hsdev = HSDEV_FROM_HSDEVP(hsdevp);
++	struct ata_host *host = ap->host;
++
++	dwc_port_dbg(ap, "%s cmd(0x%02x):%s tag=%d ap->link.active_tag=0x%08x\n", __func__, 
++		tf->command, cmd2txt(tf), tag, ap->link.active_tag);
++	spin_lock_irqsave(&host->lock, flags);
++	hsdevp->cmd_issued[tag] = cmd_issued;
++	hsdevp->sactive_queued |= TAG2MASK(tag);
++	spin_unlock_irqrestore(&ap->host->lock, flags);
++
++	/* Clear SError before executing a new command. TODO if we read a PM's registers now,
++	 * we will throw away the task file values loaded into the shadow registers for this command.
++	 * sata_dwc_scr_write and read can not be used here. */
++	CLEAR_SERROR(hsdev);	// needs to be done before the task file is loaded
++	//ap->ops->sff_exec_command(ap, tf);
++	iowrite8(tf->command, ap->ioaddr.command_addr); //issue ATA command to host controller
++	//if (ap->ioaddr.altstatus_addr)
++	ioread8(ap->ioaddr.altstatus_addr);  // Flush writes and wait
++	ndelay(pause_after_command_exec);
++	//spin_unlock_irqrestore(&host->lock, flags);
++}
++
++/* This works only for non-NCQ and PIO commands */
++static void sata_dwc_bmdma_setup(struct ata_queued_cmd *qc) {
++	u8 tag = (likely(ata_is_dma(qc->tf.protocol))) ? qc->tag : 0;
++	dwc_port_dbg(qc->ap, "%s tag=%d ap->link.active_tag=0x%08x qc->tag=%d\n", 
++		__func__, tag, qc->ap->link.active_tag, qc->tag);
++	sata_dwc_exec_command_by_tag(qc->ap, &qc->tf, tag, SATA_DWC_CMD_ISSUED_PENDING);
++}
++
++/* Configure DMA registers and then start DMA transfer */
++static __always_inline void sata_dwc_bmdma_start_by_tag(struct ata_queued_cmd *qc, u8 tag) {
++	struct ata_port *ap = qc->ap;
++	register struct sata_dwc_device_port *hsdevp = HSDEVP_FROM_AP(ap);
++	struct sata_dwc_device *hsdev = HSDEV_FROM_HSDEVP(hsdevp);
++	u32 statusIntr, reg, ch_en, dma_en_ch, __iomem *dm = &(hsdev->sata_dwc_regs->dmacr);
++	int dma_chan, idx = 0; //, tag = qc->tag;
++
++	dwc_port_dbg(ap, "%s: tag=%d qc->tag=%d link.active_tag=0x%08x cmd:%s dma_dir:%s link.sactive=0x%08x dma_chan_en=%x\n", 
++		__func__, tag, qc->tag, ap->link.active_tag, cmd2txt(&qc->tf), dir2txt(qc->dma_dir), ap->link.sactive, in_le32(&sata_dma_regs->dma_chan_en.low));
++
++	if (unlikely(hsdevp->cmd_issued[tag] == SATA_DWC_CMD_ISSUED_NOT)) {
++		dev_err(ap->dev, "%s: Command %d (tag=%d) not pending - DMA NOT started\n", __func__, hsdevp->cmd_issued[tag], tag);
++		return;
++	}
++	dma_chan = DMA_REQUEST_CHANNEL(hsdev->dma_channel);	// Acquire DMA channel
++	while (unlikely(dma_chan == -1)) { 	// Try to request 10 times maximum if busy
++		if (idx++ == 10) {  // In case DMA channel is not available, mask the NCQ to be error
++			dev_err(ap->dev, "%s: DMA channel unavailable/in use\n", __func__);
++			qc->err_mask |= AC_ERR_TIMEOUT;  // Offending this QC
++			return;
++		}
++		udelay(10);
++		dma_chan = DMA_REQUEST_CHANNEL(hsdev->dma_channel);
++	}
++	dwc_port_vdbg(ap, "%s: Got channel %d\n", __func__, dma_chan);
++
++	// DMA Setup Step 1: DMA configuration registers, SG registers
++	dma_xfer_setup(dma_chan, hsdevp->llit_dma[tag]);  // Configure DMA channel ready for DMA transfer
++
++#ifdef DWC_VDEBUG
++	sata_dwc_tf_dump(hsdev->dev, &qc->tf);
++#endif
++
++	// DMA Setup Step 1: Before starting DMA transfer, check for error first
++	reg = SATA_DWC_CORE_SCR_READ(hsdev, SCR_ERROR);
++	if (unlikely(reg & SATA_DWC_SERR_ERR_BITS))
++		dev_err(ap->dev, "%s: ****** serror=0x%08x ******\n", __func__, reg);
++
++	// DMA Setup Step 2: set DMA control registers
++	if (qc->dma_dir == DMA_TO_DEVICE) {
++		hsdevp->dma_pending[tag] = SATA_DWC_DMA_PENDING_TX;
++		out_le32(dm, SATA_DWC_DMACR_TXCHEN);
++	} else {
++		hsdevp->dma_pending[tag] = SATA_DWC_DMA_PENDING_RX;
++		out_le32(dm, SATA_DWC_DMACR_RXCHEN);
++	}
++	hsdevp->cmd_issued[tag] = SATA_DWC_CMD_ISSUED_EXEC;
++	hsdevp->no_dma_pending++;
++	dwc_dev_dbg(ap->dev, "%s: DMACR:0x%08x\n", __func__, in_le32(dm));
++
++	// DMA setup Step 3: All is ready, issue DMA command by enabling the channel
++	dma_xfer_setup(dma_chan, hsdevp->llit_dma[tag]);  // Configure DMA channel ready for DMA transfer
++	//statusIntr = in_le32(&sata_dma_regs->statusInt.low);
++	//if (unlikely(statusIntr!=(u32)0x0));	/* Verify if interrupts are clear */
++	//	dwc_printk_dbg("%s: Error: slave channel intr. not clear, combined status int=0x%08x\n", __func__, statusIntr);
++	print_dma_registers_vdbg(hsdev);
++
++	// DMA setup final step 4: enable the channel
++	dm = &(sata_dma_regs->dma_chan_en.low);
++	ch_en = in_le32(dm);
++	dma_en_ch = DMA_ENABLE_CHAN(dma_chan);
++	if (unlikely(ch_en & dma_en_ch)) { dev_err(ap->dev,"%s: BUG: Attempted to start non-idle channel\n", __func__); return;}
++	dwc_port_vdbg(ap, "DMA CH_EN new:0x%04x old:0x%04x dma_ch=%d\n", ch_en | dma_en_ch, ch_en, dma_chan);
++	out_le32(IOMEM(dm), ch_en | dma_en_ch);	// Enable the channel
++
++
++#if defined(CONFIG_APOLLO3G) //&& defined(DWC_DEBUG)
++//	signal_hdd_led(1 /*blink=yes*/, 2 /* _3G_LED_GREEN */);
++	signal_hdd_led(_3G_BLINK_YES, _3G_LED_GREEN);
++#endif
++	dwc_port_vdbg(ap, "DMA CFG=0x%08x dma_ch=%d\n", in_le32(&sata_dma_regs->dma_cfg.low), dma_chan);
++	dwc_port_dbg(ap, "%s: setting sata_dma_regs->dma_chan_en.low with val: 0x%08x\n", __func__, in_le32(dm));
++	print_dma_registers_vdbg(hsdev);
++}
++
++/* Set tag and then start DMA transfer */
++static void sata_dwc_bmdma_start(struct ata_queued_cmd *qc) {
++	//register struct ata_port *ap = qc->ap;
++	//struct sata_dwc_device_port *hsdevp = HSDEVP_FROM_AP(ap);
++	//u8 tag = (ata_is_ncq(qc->tf.protocol)) ? qc->tag : 0;
++	u8 tag = qc->tag;
++
++	dwc_port_dbg(qc->ap, "%s: protocol=%s tag=%d ap->link.sactive=0x%08x qc->tag=%d\n", 
++		__func__, prot2txt(qc->tf.protocol), tag, qc->ap->link.sactive, qc->tag);
++	//hsdevp->cmd_issued[tag] = SATA_DWC_CMD_ISSUED_PENDING; // temporary fix
++	sata_dwc_bmdma_start_by_tag(qc, tag);
++}
++
++/* ata_sff_exec_command - issue ATA command to host controller */
++void sata_dwc_exec_command(struct ata_port *ap, const struct ata_taskfile *tf) {
++	dwc_port_vdbg(ap, "%s\n", __func__);
++	iowrite8(tf->command, ap->ioaddr.command_addr);
++	/*	If we have an mmio device with no ctl and no altstatus method this will fail. */
++	//if (ap->ioaddr.altstatus_addr)
++		ioread8(ap->ioaddr.altstatus_addr);
++	ndelay(400);
++}
++
++/* Process command queue issue */
++static unsigned int sata_dwc_qc_issue(struct ata_queued_cmd *qc) {
++	register struct ata_port *ap = qc->ap;
++	struct sata_dwc_device_port *hsdevp = HSDEVP_FROM_AP(ap);
++	struct sata_dwc_device *hsdev = HSDEV_FROM_HSDEVP(hsdevp);
++	u32 status, sactive;
++	u8 tag = qc->tag;
++
++	dwc_port_dbg(ap, "%s, qc->tag=%d, prot=%s, cmd=%s, hsdevp->sactive_issued=0x%08x\n", __func__, 
++		tag, prot2txt(qc->tf.protocol), cmd2txt(&qc->tf), hsdevp->sactive_issued);
++
++#ifdef DEBUG_NCQ
++	if ((tag > 0) && (tag < 31) ) {
++		dev_info(ap->dev, "%s ap id=%d cmd(0x%02x)=%s qc tag=%d prot=%s ap active_tag=0x%08x ap sactive=0x%08x\n",
++			__func__, ap->print_id, qc->tf.command,	cmd2txt(&qc->tf), tag,
++			prot2txt(qc->tf.protocol), ap->link.active_tag, ap->link.sactive);
++	}
++#endif
++	// Set PMP field in the SCONTROL register
++	if (unlikely(sata_pmp_attached(ap)))
++		sata_dwc_pmp_select(ap, qc->dev->link->pmp);
++	
++	if (ata_is_dma(qc->tf.protocol))
++		//dma_xfer_setup(qc, hsdev, hsdevp, tag);
++		/* Convert SG list to linked list of items (LLIs) for AHB DMA */
++		hsdevp->num_lli[tag] = map_sg_to_lli(qc, hsdevp, hsdev, tag);
++
++	if (likely(ata_is_ncq(qc->tf.protocol))) {	// Process NCQ
++		/* If the device is in BUSY state, ignore the current QC.*/
++		status = SATA_DWC_CHECK_STATUS(ap);
++		if (unlikely(status & ATA_BUSY)) { // Ignore the QC when device is BUSY more than 1000 ms
++			sactive = SATA_DWC_CORE_SCR_READ(hsdev, SCR_ACTIVE);
++			ata_port_printk(ap, KERN_INFO, "Ignore current QC because device BUSY: tag=%d sactive=0x%08x)\n",
++				tag, sactive);
++			return AC_ERR_SYSTEM;
++		}
++		// FPDMA Step 1. : Load command from taskfile to device
++		ap->ops->sff_tf_load(ap, &qc->tf);
++		// Write command to the COMMAND register
++		sata_dwc_exec_command_by_tag(ap, &qc->tf, tag, SATA_DWC_CMD_ISSUED_PENDING);
++
++		// Write the QC tag bit to the SACTIVE register
++		sactive = SATA_DWC_CORE_SCR_READ(hsdev, SCR_ACTIVE) | (0x00000001 << tag);
++		SATA_DWC_CORE_SCR_WRITE(hsdev, SCR_ACTIVE, sactive);
++
++		/* FPDMA Step 2: Check to see if device clears BUSY bit. If not, set the link.active_tag to the value different than
++		* ATA_TAG_POISON so that the qc_defer will defer additional QCs (no more QC is queued) */
++		if (unlikely(ap->link.active_tag != ATA_TAG_POISON))
++			dev_warn(ap->dev, "%s: Some process changed ap->link.active_tag to %d\n", __func__, ap->link.active_tag);
++		status = SATA_DWC_CHECK_STATUS(ap);
++		if (status & ATA_BUSY) ap->link.active_tag = tag;
++		return 0;
++	}
++	// Non NCQ DMA transfers will be handled by libATA as BMDMA
++	dwc_port_dbg(ap, "%s: non NCQ process ap->link.active_tag=0x%08x tag=%d(%02x)\n",
++		__func__, ap->link.active_tag, tag, tag);
++	// Without this line, PMP may fail to execute the ATA_CMD_READ_NATIVE_MAX_EXT command
++	ap->link.active_tag = tag;
++	// Call SFF qc_issue to process non-NCQ commands
++    return ata_bmdma_qc_issue(qc); // Process non-NCQ commands as DMA
++}
++
++/* Function : sata_dwc_qc_prep
++ * arguments : ata_queued_cmd *qc
++ * Return value : None
++ * qc_prep for a particular queued command
++ */
++static void sata_dwc_qc_prep(struct ata_queued_cmd *qc) {
++	u32 sstatus;
++	u8 tag = 0;
++	struct ata_port *ap = qc->ap;
++	struct sata_dwc_device *hsdev = HSDEV_FROM_AP(ap);
++	struct ata_eh_info *ehi;
++
++	dwc_port_dbg(ap, "%s: Protocol=%s command=%s active_tag=0x%08x qc->tag=%d\n", 
++		__func__, prot2txt(qc->tf.protocol), cmd2txt(&qc->tf), ap->link.active_tag, qc->tag);
++	/* not needed, since the timer thread is not running 
++	if ( (qc->tag < 32) && (qc->tag > hsdevp->max_tag))
++		hsdevp->max_tag = qc->tag; */
++	print_dma_registers_vdbg(hsdev);
++
++	/* Fix the problem when PMP card is unplugged from the SATA port.
++	 * QC is still issued but no device present. Ignore current QC, pass error to error handler */
++	sstatus = SATA_DWC_CORE_SCR_READ(hsdev, SCR_STATUS);
++	if (unlikely(sstatus == 0x0)) {
++		ata_port_printk(ap, KERN_INFO, "Connection lost during command execution -> ignore current command\n");
++		ehi = &ap->link.eh_info;
++		ata_ehi_hotplugged(ehi);
++		ap->link.eh_context.i.action |= ATA_EH_RESET;
++		return;
++	}
++	// Do nothing if not DMA or NCQ
++	if (unlikely((qc->dma_dir == DMA_NONE) || (qc->tf.protocol == ATA_PROT_PIO)))
++		return;
++
++	// Set the tag
++	if (ata_is_ncq(qc->tf.protocol) ) {
++		if (ap->link.active_tag != ATA_TAG_POISON)
++			dev_err(ap->dev, "%s: Some process changed ap->link.active_tag to %d\n",__func__, ap->link.active_tag);
++		tag = qc->tag;
++	}
++}
++
++static void sata_dwc_post_internal_cmd(struct ata_queued_cmd *qc) {
++	if (qc->flags & ATA_QCFLAG_FAILED)
++		ata_eh_freeze_port(qc->ap);
++}
++
++static void sata_dwc_error_handler(struct ata_port *ap) {
++
++#ifdef DWC_VDEBUG
++	struct sata_dwc_device_port *hsdevp = HSDEVP_FROM_AP(ap);
++	dwc_port_vdbg(ap, "%s - sactive_queued=0x%08x, sactive_issued=0x%08x, no_dma_pending=%d\n",__func__, hsdevp->sactive_queued, hsdevp->sactive_issued, hsdevp->no_dma_pending);
++	dwc_port_vdbg(ap, "qc_active=0x%08x\n", ap->qc_active);
++#endif
++	dwc_port_dbg(ap, "%s\n", __func__);
++	sata_pmp_error_handler(ap);	// Call PMP Error Handler to handle SATA port errors
++}
++
++/* sata_dwc_check_status - Get value of the Status Register */
++u8 sata_dwc_check_status(struct ata_port *ap) {
++	dwc_port_vdbg(ap, "%s status=0x%08x\n", __func__, SATA_DWC_CHECK_STATUS(ap));
++	return SATA_DWC_CHECK_STATUS(ap);	// status register (CDR7)
++}
++
++/* Freeze the port by clear interrupt, @ap: Port to freeze */
++void sata_dwc_freeze(struct ata_port *ap) {
++	struct sata_dwc_device *hsdev = HSDEV_FROM_AP(ap);
++	struct sata_dwc_regs *dwc_regs = hsdev->sata_dwc_regs;
++	dwc_port_dbg(ap, "%s: turn off interrupts\n",__func__);
++
++	CLEAR_INTPR(dwc_regs);				// Clear IRQ
++	CLEAR_SERROR(hsdev);				// Clear errors SError/SCR_ERROR
++	out_le32(&dwc_regs->intmr, 0x0);	// Turn IRQ off
++}
++
++/* Thaw the port by turning IRQ on */
++void sata_dwc_thaw(struct ata_port *ap) {
++	struct sata_dwc_device *hsdev = HSDEV_FROM_AP(ap);
++	struct sata_dwc_regs __iomem *dwc_regs = hsdev->sata_dwc_regs;
++
++	dwc_port_dbg(ap, "%s: Turn IRQ on\n",__func__);
++	CLEAR_INTPR(dwc_regs);					// Clear all bits in IRQ
++	sata_dwc_enable_interrupts(dwc_regs);	// Turn IRQ back on
++}
++
++/* scsi mid-layer and libata interface structures  */
++static struct scsi_host_template sata_dwc_sht = {
++	ATA_NCQ_SHT(DRV_NAME),
++	//.sg_tablesize       = LIBATA_MAX_PRD,
++#ifdef SATA_DWC_NCQ
++	.can_queue 			= ATA_MAX_QUEUE, 	// NCQ
++#else
++	.can_queue 			= ATA_DEF_QUEUE,	// No NCQ --> max queue depth=1
++#endif
++	.dma_boundary 		= ATA_DMA_BOUNDARY, //0x1fff, // 
++};
++
++static struct ata_port_operations sata_dwc_ops = {
++	.inherits		= &sata_pmp_port_ops,
++	.dev_config		= sata_dwc_dev_config,
++	
++	.error_handler	= sata_dwc_error_handler,
++	.softreset		= sata_dwc_softreset,
++	.hardreset		= sata_dwc_hardreset,
++	.pmp_softreset	= sata_dwc_softreset,
++	.pmp_hardreset	= sata_dwc_pmp_hardreset,
++
++	.qc_defer		= sata_pmp_qc_defer_cmd_switch,
++	.qc_prep		= sata_dwc_qc_prep,
++	.qc_issue		= sata_dwc_qc_issue,
++	.qc_fill_rtf	= ata_sff_qc_fill_rtf,
++
++	.scr_read		= sata_dwc_scr_read,
++	.scr_write		= sata_dwc_scr_write,
++
++	.port_start		= sata_dwc_port_start,
++	.port_stop		= sata_dwc_port_stop,
++
++	.bmdma_setup	= sata_dwc_bmdma_setup,
++	.bmdma_start	= sata_dwc_bmdma_start,
++	// Reuse some SFF functions
++	.sff_check_status	= sata_dwc_check_status,
++	.sff_tf_read	= ata_sff_tf_read,
++	.sff_data_xfer	= ata_sff_data_xfer,
++	.sff_tf_load	= ata_sff_tf_load,
++	.sff_dev_select	= sata_dwc_dev_select,
++	.sff_exec_command	= sata_dwc_exec_command,		//DIFF
++
++	.sff_irq_on		= sata_dwc_irq_on,
++/*	.sff_irq_clear	= sata_dwc_irq_clear,
++	.freeze			= sata_dwc_freeze,
++	.thaw			= sata_dwc_thaw,
++	.sff_irq_on		= ata_sff_irq_on,
++	*/
++	.sff_irq_clear	= ata_bmdma_irq_clear,
++	.freeze			= ata_sff_freeze,
++	.thaw			= ata_sff_thaw,
++	.pmp_attach		= sata_dwc_pmp_attach,
++	.pmp_detach		= sata_dwc_pmp_detach,
++	.post_internal_cmd	= sata_dwc_post_internal_cmd,
++};
++
++static const struct ata_port_info sata_dwc_port_info[] = {
++	{
++//		.flags		= ATA_FLAG_SATA|ATA_FLAG_NO_LEGACY|ATA_FLAG_MMIO|ATA_FLAG_NCQ|ATA_FLAG_PMP|ATA_FLAG_AN,
++		.flags		= ATA_FLAG_SATA|ATA_FLAG_NCQ|ATA_FLAG_PMP|ATA_FLAG_AN,
++		.pio_mask	= 0x1f,	/* pio 0-4 */
++		.udma_mask	= ATA_UDMA6,
++		.port_ops	= &sata_dwc_ops,
++	},
++};
++
++/* Each SATA DWC node in the device tree will call this function once.*/
++static int sata_dwc_probe(struct platform_device *ofdev) {
++	struct sata_dwc_device *hsdev;
++	u32 idr, versionr;
++	char *ver = (char *)&versionr;
++	u8 *base = NULL;
++	int irq, err = 0;
++	struct ata_host *host;
++	struct ata_port_info pi = sata_dwc_port_info[0];
++	const struct ata_port_info *ppi[] = { &pi, NULL };
++	struct device *dp = &ofdev->dev;
++	struct device_node *np = dp->of_node;
++	const unsigned int *dma_channel;
++#ifdef SATA_DWC_NCQ
++	dev_notice(dp, "SATA DWC driver %s with NCQ support\n", __FILE__);
++#else
++	dev_notice(dp, "SATA DWC driver %s without NCQ support\n", __FILE__);
++#endif
++	if (!of_device_is_available(np)) {	// Check if device is enabled
++		printk(KERN_INFO "%s: Port disabled via device-tree\n", np->full_name);
++		return 0;
++	}
++
++	hsdev = kzalloc(sizeof(*hsdev), GFP_KERNEL); // Allocate DWC SATA device 
++	if (hsdev == NULL) {
++		dev_err(dp, "kzalloc failed for hsdev\n");
++		err = -ENOMEM;
++		goto error_out;
++	}
++
++	// Identify SATA DMA channel used for the current SATA device
++	dma_channel = of_get_property(np, "dma-channel", NULL);
++	if (dma_channel) {
++		dev_notice(dp, "Getting DMA channel %d\n", *dma_channel);
++		hsdev->dma_channel = *dma_channel;
++	} else hsdev->dma_channel = 0;
++
++	/* Ioremap SATA registers */
++	base = of_iomap(np, 0);
++	if (!base) {
++		dev_err(dp, "ioremap failed for SATA register address\n");
++		err = -ENODEV;
++		goto error_out;
++	}
++	hsdev->reg_base = base;
++	dwc_dev_vdbg(dp, "ioremap done for SATA register address\n");
++
++	/* Synopsys DWC SATA specific Registers */
++	hsdev->sata_dwc_regs = (void *__iomem)(base + SATA_DWC_REG_OFFSET);
++
++	/* Allocate and fill host */
++	host = ata_host_alloc_pinfo(dp, ppi, SATA_DWC_MAX_PORTS);
++	if (!host) {
++		dev_err(dp, "ata_host_alloc_pinfo failed\n");
++		err = -ENOMEM;
++		goto error_out;
++	}
++	host->private_data = hsdev;
++
++	/* Setup port */
++	host->ports[0]->ioaddr.cmd_addr = base;
++	host->ports[0]->ioaddr.scr_addr = base + SATA_DWC_SCR_OFFSET;
++	hsdev->scr_base = (u8 *)(base + SATA_DWC_SCR_OFFSET);
++	sata_dwc_setup_port(&host->ports[0]->ioaddr, (unsigned long)base);
++
++	/* Read the ID and Version Registers */
++	idr = in_le32(&hsdev->sata_dwc_regs->idr);
++	versionr = in_le32(&hsdev->sata_dwc_regs->versionr);
++	dev_notice(dp, "id %d, controller version %c.%c%c\n", idr, ver[0], ver[1], ver[2]);
++
++	/* Get SATA DMA interrupt number */
++	irq = irq_of_parse_and_map(np, 1);
++	if (irq == NO_IRQ) {
++		dev_err(dp, "no SATA DMA irq\n");
++		err = -ENODEV;
++		goto error_out;
++	}
++
++	/* Get physical SATA DMA register base address */
++	if (!sata_dma_regs) {
++		sata_dma_regs = of_iomap(np, 1);
++		if (!sata_dma_regs) {
++			dev_err(dp, "ioremap failed for AHBDMA register address\n");
++			err = -ENODEV;
++			goto error_out;
++		}
++	}
++	hsdev->dev = dp;	// Save dev for later use in dev_xxx() routines
++	dwc_dev_list[hsdev->dma_channel] = hsdev;	// Initialize global dev list
++	
++	hsdev->irq_dma = irq;	// Initialize AHB DMAC
++	dma_init(hsdev);
++	dma_register_isr(hsdev);
++
++	sata_dwc_enable_interrupts(hsdev->sata_dwc_regs);	// Enable SATA Interrupts
++	irq = irq_of_parse_and_map(np, 0);	// Get SATA interrupt number
++	if (irq == NO_IRQ) {
++		dev_err(dp, "no SATA irq\n");
++		err = -ENODEV;
++		goto error_out;
++	}
++
++	/* Now, register with libATA core, this will also initiate the
++	 * device discovery process, invoking our port_start() handler &
++	 * error_handler() to execute a dummy Softreset EH session */
++	ata_host_activate(host, irq, sata_dwc_isr, 0, &sata_dwc_sht);
++	dev_set_drvdata(dp, host);
++	return 0;  // Everything is fine
++
++error_out:
++	dma_exit(hsdev);		// Free SATA DMA resources
++	if (base) iounmap(base);
++	if (hsdev) kfree(hsdev);
++	return err;
++}
++
++static int sata_dwc_remove(struct platform_device *ofdev) {
++	struct device *dev = &ofdev->dev;
++	struct ata_host *host = dev_get_drvdata(dev);
++	struct sata_dwc_device *hsdev = HSDEV_FROM_HOST(host);
++	ata_host_detach(host);
++	dev_set_drvdata(dev, NULL);
++	dma_exit(hsdev); 	// Free SATA DMA resources
++	iounmap(hsdev->reg_base);
++	kfree(hsdev);
++	kfree(host);
++
++	dwc_dev_vdbg(&ofdev->dev, "done\n");
++	return 0;
++}
++
++static const struct of_device_id sata_dwc_match[] = {
++	{ .compatible = "amcc,sata-460ex", },
++	{ .compatible = "amcc,sata-apm82181", },
++	{}
++};
++MODULE_DEVICE_TABLE(of, sata_dwc_match);
++
++static struct platform_driver sata_dwc_driver = {
++	.driver = {
++		.name = DRV_NAME,
++		.of_match_table = sata_dwc_match,
++	},
++	.probe = sata_dwc_probe,
++	.remove = sata_dwc_remove,
++};
++
++module_param(pause_after_command_exec, int, 0644);
++MODULE_PARM_DESC(pause_after_command_exec, "Delay in ns after command execute");
++module_param(pause_dma_pending, int, 0644);
++MODULE_PARM_DESC(pause_dma_pending, "Delay in ns after QC complete");
++
++module_platform_driver(sata_dwc_driver);
++
++MODULE_LICENSE("GPL");
++MODULE_AUTHOR("Mark Miesfeld <mmiesfeld@amcc.com>");
++MODULE_DESCRIPTION("DesignWare Cores SATA controller driver");
++MODULE_VERSION(DRV_VERSION);

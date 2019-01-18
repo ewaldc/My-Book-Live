@@ -1,0 +1,565 @@
+diff --git a/arch/powerpc/boot/dts/apollo3g.dts b/arch/powerpc/boot/dts/apollo3g.dts
+new file mode 100644
+index 0000000..1b0fee8
+--- /dev/null
++++ b/arch/powerpc/boot/dts/apollo3g.dts
+@@ -0,0 +1,453 @@
++/*
++ * Device Tree Source for AMCC Canyonlands (460EX)
++ *
++ * Copyright 2008 DENX Software Engineering, Stefan Roese <sr@denx.de>
++* (c) Copyright 2010 Western Digital Technologies, Inc. All Rights Reserved.
++ *
++ * This file is licensed under the terms of the GNU General Public
++ * License version 2.  This program is licensed "as is" without
++ * any warranty of any kind, whether express or implied.
++ */
++
++/dts-v1/;
++
++/ {
++	#address-cells = <2>;
++	#size-cells = <1>;
++	model = "amcc,apollo3g";
++	compatible = "amcc,apollo3g";
++	dcr-parent = <&{/cpus/cpu@0}>;
++
++	aliases {
++		ethernet0 = &EMAC0;
++		serial0 = &UART0;
++	};
++
++	cpus {
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		cpu@0 {
++			device_type = "cpu";
++			model = "PowerPC,apm821xx";
++			reg = <0x00000000>;
++			clock-frequency = <0>; /* Filled in by U-Boot */
++			timebase-frequency = <0>; /* Filled in by U-Boot */
++			i-cache-line-size = <32>;
++			d-cache-line-size = <32>;
++			i-cache-size = <32768>;
++			d-cache-size = <32768>;
++			dcr-controller;
++			dcr-access-method = "native";
++			next-level-cache = <&L2C0>;
++		};
++	};
++
++	memory {
++		device_type = "memory";
++		reg = <0x00000000 0x00000000 0x00000000>; /* Filled in by U-Boot */
++	};
++
++	UIC0: interrupt-controller0 {
++		compatible = "ibm,uic-460ex","ibm,uic";
++		interrupt-controller;
++		cell-index = <0>;
++		dcr-reg = <0x0c0 0x009>;
++		#address-cells = <0>;
++		#size-cells = <0>;
++		#interrupt-cells = <2>;
++	};
++
++	UIC1: interrupt-controller1 {
++		compatible = "ibm,uic-460ex","ibm,uic";
++		interrupt-controller;
++		cell-index = <1>;
++		dcr-reg = <0x0d0 0x009>;
++		#address-cells = <0>;
++		#size-cells = <0>;
++		#interrupt-cells = <2>;
++		interrupts = <0x1e 0x4 0x1f 0x4>; /* cascade */
++		interrupt-parent = <&UIC0>;
++	};
++
++	UIC2: interrupt-controller2 {
++		compatible = "ibm,uic-460ex","ibm,uic";
++		interrupt-controller;
++		cell-index = <2>;
++		dcr-reg = <0x0e0 0x009>;
++		#address-cells = <0>;
++		#size-cells = <0>;
++		#interrupt-cells = <2>;
++		interrupts = <0xa 0x4 0xb 0x4>; /* cascade */
++		interrupt-parent = <&UIC0>;
++	};
++
++	UIC3: interrupt-controller3 {
++		compatible = "ibm,uic-460ex","ibm,uic";
++		interrupt-controller;
++		cell-index = <3>;
++		dcr-reg = <0x0f0 0x009>;
++		#address-cells = <0>;
++		#size-cells = <0>;
++		#interrupt-cells = <2>;
++		interrupts = <0x10 0x4 0x11 0x4>; /* cascade */
++		interrupt-parent = <&UIC0>;
++	};
++
++	OCM1: ocm@400040000 {
++		compatible = "ibm,ocm";
++		status = "enabled";
++		cell-index = <1>;
++		/* configured in U-Boot */
++		reg = <4 0x00040000 0x8000>; /* 32K */
++	};
++
++	/* TODO: Check this for Maui */
++	SDR0: sdr {
++		compatible = "ibm,sdr-460ex";
++		dcr-reg = <0x00e 0x002>;
++	};
++
++	/* TODO: Change for Maui */
++	CPR0: cpr {
++		compatible = "ibm,cpr-460ex";
++		dcr-reg = <0x00c 0x002>;
++	};
++
++	L2C0: l2c {
++		compatible = "ibm,l2-cache-apm82181", "ibm,l2-cache";
++		dcr-reg = <0x020 0x008	
++			   0x030 0x008>;	
++		cache-line-size = <32>;		
++		cache-size = <262144>;		
++		interrupt-parent = <&UIC1>;
++		interrupts = <11 1>;
++	};
++
++	plb {
++		compatible = "ibm,plb-460ex", "ibm,plb4";
++		#address-cells = <2>;
++		#size-cells = <1>;
++		ranges;
++		clock-frequency = <0>; /* Filled in by U-Boot */
++
++		SDRAM0: sdram {
++			compatible = "ibm,sdram-460ex", "ibm,sdram-405gp";
++			dcr-reg = <0x010 0x002>;
++		};
++
++		CRYPTO: crypto@180000 {
++			compatible = "amcc,ppc460ex-crypto", "amcc,ppc4xx-crypto";
++			reg = <4 0x00180000 0x80400>;
++			interrupt-parent = <&UIC0>;
++			interrupts = <0x1d 0x4>;
++		};
++
++		PKA: pka@114000 {
++			device_type = "pka";
++			compatible = "ppc4xx-pka", "amcc, ppc4xx-pka";
++			reg = <4 0x00114000 0x4000>;
++			interrupt-parent = <&UIC0>;
++			interrupts = <0x14 0x2>;
++		};
++
++		TRNG: trng@110000 {
++			device_type = "trng";
++			compatible = "ppc4xx-trng", "amcc, ppc4xx-trng";
++			reg = <4 0x00110000 0x100>;
++			interrupt-parent = <&UIC1>;
++			interrupts = <0x3 0x2>;
++		};
++
++		MAL0: mcmal {
++			compatible = "ibm,mcmal-460ex", "ibm,mcmal2";
++			descriptor-memory = "ocm";
++			dcr-reg = <0x180 0x062>;
++			num-tx-chans = <1>;
++			num-rx-chans = <1>;
++			#address-cells = <0>;
++			#size-cells = <0>;
++			interrupt-parent = <&UIC2>;
++			interrupts = <	/*TXEOB*/ 0x6 0x4
++					/*RXEOB*/ 0x7 0x4
++					/*SERR*/  0x3 0x4
++					/*TXDE*/  0x4 0x4
++					/*RXDE*/  0x5 0x4
++					/*TX0 COAL*/  0x8 0x2
++                                        /*TX1 COAL  0x9 0x2*/
++                                        /*RX0 COAL*/  0xc 0x2
++                                        /*RX1 COAL  0xd 0x2*/>;
++		};
++
++                USBOTG0: usbotg@bff80000 {
++                        compatible = "amcc,usb-otg-405ex";
++                        reg = <4 0xbff80000 0x10000>;
++                        interrupt-parent = <&USBOTG0>;
++                        interrupts = <0 1 2>; 
++                        #interrupt-cells = <1>;
++                        #address-cells = <0>;
++                        #size-cells = <0>;
++                        interrupt-map = </* USB-OTG */ 0 &UIC2 0x1c 4
++                                         /* HIGH-POWER */ 1 &UIC1 0x1a 8
++                                         /* DMA */ 2 &UIC0 0xc 4>; 
++                };  
++
++
++		/* SATA DWC devices */
++		SATA0: sata@bffd1000 {
++				compatible = "amcc,sata-460ex";
++				reg = <4 0xbffd1000 0x800       /* SATA0 */
++					   4 0xbffd0800 0x400>;     /* AHBDMA */
++				dma-channel=<0>;
++				interrupt-parent = <&UIC0>;
++				interrupts = <26 4      /* SATA0 */
++							  25 4>;    /* AHBDMA */
++		};
++		SATA1: sata@bffd1800 {
++			compatible = "amcc,sata-460ex";
++			reg = <4 0xbffd1800 0x800	/* SATA1 */
++			       4 0xbffd0800 0x400>;	/* AHBDMA */
++			dma-channel=<1>;
++			interrupt-parent = <&UIC0>;
++			interrupts = <27 4	/* SATA1 */
++				      25 4>;	/* AHBDMA */
++		};
++
++		ADMA: adma {
++                        compatible = "amcc,apm82181-adma";
++                        device_type = "dma";
++                        #address-cells = <2>;
++                        #size-cells = <1>;
++
++                        /*dma-4channel@0{
++                                compatible = "amcc,apm82181-dma-4channel";
++                                cell-index = <0>;
++                                label = "plb_dma0";
++                                interrupt-parent = <&UIC0>;
++                                interrupts = <0xc 0x4>;
++                                pool_size = <0x4000>;
++                                dcr-reg = <0x200 0x207>;
++                        };*/
++			
++                        dma-4channel@1 {
++                                compatible = "amcc,apm82181-dma-4channel";
++                                cell-index = <1>;
++                                label = "plb_dma1";
++                                interrupt-parent = <&UIC0>;
++                                interrupts = <0xd 0x4>;
++                                pool_size = <0x4000>;
++                                dcr-reg = <0x208 0x20f>;
++                        };
++                        dma-4channel@2 {
++                                compatible = "amcc,apm82181-dma-4channel";
++                                cell-index = <2>;
++                                label = "plb_dma2";
++                                interrupt-parent = <&UIC0>;
++                                interrupts = <0xe 0x4>;
++                                pool_size = <0x4000>;
++                                dcr-reg = <0x210 0x217>;
++                        };
++                        dma-4channel@3 {
++                                compatible = "amcc,apm82181-dma-4channel";
++                                cell-index = <3>;
++                                label = "plb_dma3";
++                                interrupt-parent = <&UIC0>;
++                                interrupts = <0xf 0x4>;
++                                pool_size = <0x4000>;
++                                dcr-reg = <0x218 0x21f>;
++                        };
++                };
++
++		POB0: opb {
++			compatible = "ibm,opb-460ex", "ibm,opb";
++			#address-cells = <1>;
++			#size-cells = <1>;
++			ranges = <0xb0000000 0x00000004 0xb0000000 0x50000000>;
++			clock-frequency = <0>; /* Filled in by U-Boot */
++
++			EBC0: ebc {
++				compatible = "ibm,ebc-460ex", "ibm,ebc";
++				dcr-reg = <0x012 0x002>;
++				#address-cells = <2>;
++				#size-cells = <1>;
++				clock-frequency = <0>; /* Filled in by U-Boot */
++				/* ranges property is supplied by U-Boot */
++				ranges = < 0x00000003 0x00000000 0xe0000000 0x8000000>;
++				interrupts = <0x6 0x4>;
++				interrupt-parent = <&UIC1>;
++
++				/* Define device tree for Apollo3g NAS NOR flash */
++                                nor_flash@0,0 {
++                                        compatible = "amd,s29gl512n", "jedec-flash", "cfi-flash";
++                                        bank-width = <1>;
++                                        reg = <0x00000000 0x00000000 0x00080000>;
++                                        #address-cells = <1>;
++                                        #size-cells = <1>;
++                                        partition@0 {
++                                                label = "3genv";
++                                                reg = <0x00000000 0x20000>;
++                                        };  
++                                        partition@1 {
++                                                label = "u-boot";
++                                                reg = <0x20000 0x60000>;
++                                        };  
++                                };  
++				/* Define device tree for LEDs */
++                                leds@1,0 {
++                                        compatible = "a3g-leds", "gpio_leds";
++                                        reg = <0x00000000 0x00000000 0x00000400>;
++                                };  
++
++				ndfc@1,0 {
++					compatible = "ibm,ndfc";
++					reg = <00000003 00000000 00002000>;
++					ccr = <0x00001000>;
++					bank-settings = <0x80002222>;
++					#address-cells = <1>;
++					#size-cells = <1>;
++					/*2Gb Nand Flash*/
++					nand {
++                                                #address-cells = <1>;
++                                                #size-cells = <1>;
++
++                                                partition@0 {
++                                                        label = "firmware";
++                                                        reg   = <0x00000000 0x00C00000>;
++                                                };
++                                                partition@c00000 {
++                                                        label = "environment";
++                                                        reg   = <0x00C00000 0x00B00000>;
++                                                };
++                                                partition@1700000 {
++                                                        label = "kernel";
++                                                        reg   = <0x01700000 0x00E00000>;
++                                                };
++                                                partition@2500000 {
++                                                        label = "root";
++                                                        reg   = <0x02500000 0x08200000>;
++                                                };
++                                                partition@a700000 {
++                                                        label = "device-tree";
++                                                        reg   = <0x0A700000 0x00B00000>;
++                                                };
++						 partition@b200000 {
++                                                        label = "config";
++                                                        reg   = <0x0B200000 0x00D00000>;
++                                                };
++                                                partition@bf00000 {
++                                                        label = "diag";
++                                                        reg   = <0x0BF00000 0x00C00000>;
++                                                };
++                                                partition@cb00000 {
++                                                        label = "vendor";
++                                                        reg   = <0x0CB00000 0x3500000>;
++                                                };
++					};
++				};
++			};
++
++			UART0: serial@ef600300 {
++				device_type = "serial";
++				compatible = "ns16550";
++				reg = <0xef600300 0x00000008>;
++				virtual-reg = <0xef600300>;
++				clock-frequency = <0>; /* Filled in by U-Boot */
++				current-speed = <0>; /* Filled in by U-Boot */
++				interrupt-parent = <&UIC1>;
++				interrupts = <0x1 0x4>;
++			};
++
++			IIC0: i2c@ef600700 {
++				compatible = "ibm,iic-460ex", "ibm,iic";
++				reg = <0xef600700 0x00000014>;
++				interrupt-parent = <&UIC0>;
++				interrupts = <0x2 0x4>;
++			};
++
++			RGMII0: emac-rgmii@ef601500 {
++				compatible = "ibm,rgmii-405ex", "ibm,rgmii";
++				reg = <0xef601500 0x00000008>;
++				has-mdio;
++			};
++
++			TAH0: emac-tah@ef601350 {
++				compatible = "ibm,tah-460ex", "ibm,tah";
++				reg = <0xef601350 0x00000030>;
++			};
++
++			/* TODO: Change for Maui */
++			EMAC0: ethernet@ef600c00 {
++				device_type = "network";
++				compatible = "ibm,emac-405ex", "ibm,emac4sync";
++				interrupt-parent = <&EMAC0>;
++				interrupts = <0x0 0x1>;
++				#interrupt-cells = <1>;
++				#address-cells = <0>;
++				#size-cells = <0>;
++				interrupt-map = </*Status*/ 0x0 &UIC2 0x10 0x4
++						 /*Wake*/   0x1 &UIC2 0x14 0x4>;
++				reg = <0xef600c00 0x000000c4>;
++				local-mac-address = [000000000000]; /* Filled in by U-Boot */
++				mal-device = <&MAL0>;
++				mal-tx-channel = <0>;
++				mal-rx-channel = <0>;
++				cell-index = <0>;
++				max-frame-size = <9000>;
++				rx-fifo-size = <16384>;
++				tx-fifo-size = <2048>;
++				phy-mode = "rgmii";
++				phy-map = <0x00000000>;
++				rgmii-device = <&RGMII0>;
++				rgmii-channel = <0>;
++				tah-device = <&TAH0>;
++				tah-channel = <0>;
++				has-inverted-stacr-oc;
++				has-new-stacr-staopc;
++			};
++		};
++
++		DMA: plb_dma@400300200 {
++			#address-cells = <1>;
++			#size-cells = <1>;
++			compatible = "amcc,dma";
++			cell-index = <0>;
++			reg = <4 00300200 200>;
++			dcr-reg = <0x100 0x13f>;
++			interrupt-parent = <&UIC0>;
++			interrupts = <0 1 2 3>;
++			interrupt-map = < /*chan 0*/ 0 &UIC0 12 4
++					  /* chan1*/ 1 &UIC0 13 4
++					  /* chan2*/ 2 &UIC0 14 4
++					  /* chan3*/ 3 &UIC0 15 4>;
++
++
++			dma-4channel@0{
++				compatible = "amcc,dma-4channel";
++				cell-index = <0>;
++				label = "channel0";
++				reg = <0x100 0x107>;
++			};
++			/*
++			dma-4channel@1 {
++				compatible = "amcc,dma-4channel";
++				cell-index = <1>;
++				label = "channel1";
++				reg = <0x108 0x10f>;
++			};
++			dma-4channel@2 {
++				compatible = "amcc,dma-4channel";
++				cell-index = <2>;
++				label = "channel2";
++				reg = <0x110 0x117>;
++			};
++			dma-4channel@3 {
++				compatible = "amcc,dma-4channel";
++				cell-index = <3>;
++				label = "channel3";
++				reg = <0x118 0x11f>;
++			};
++			*/
++		};
++
++	};
++};
+diff --git a/arch/powerpc/configs/44x/apollo_3G_nas_defconfig b/arch/powerpc/configs/44x/apollo_3G_nas_defconfig
+new file mode 100644
+index 0000000..ebb4431
+--- /dev/null
++++ b/arch/powerpc/configs/44x/apollo_3G_nas_defconfig
+@@ -0,0 +1,66 @@
++CONFIG_44x=y
++CONFIG_SYSVIPC=y
++CONFIG_POSIX_MQUEUE=y
++CONFIG_NO_HZ=y
++CONFIG_HIGH_RES_TIMERS=y
++CONFIG_LOG_BUF_SHIFT=14
++CONFIG_EXPERT=y
++# CONFIG_PCI_QUIRKS is not set
++# CONFIG_VM_EVENT_COUNTERS is not set
++# CONFIG_COMPAT_BRK is not set
++CONFIG_APOLLO3G=y
++# CONFIG_EBONY is not set
++CONFIG_CMDLINE_BOOL=y
++CONFIG_CMDLINE=""
++CONFIG_NET=y
++CONFIG_PACKET=y
++CONFIG_UNIX=y
++CONFIG_INET=y
++CONFIG_IP_PNP=y
++CONFIG_IP_PNP_DHCP=y
++CONFIG_IP_PNP_BOOTP=y
++CONFIG_UEVENT_HELPER_PATH="/sbin/hotplug"
++CONFIG_CONNECTOR=y
++CONFIG_MTD=y
++CONFIG_MTD_CMDLINE_PARTS=y
++CONFIG_MTD_BLOCK=y
++CONFIG_MTD_CFI=y
++CONFIG_MTD_CFI_AMDSTD=y
++CONFIG_MTD_PHYSMAP_OF=y
++CONFIG_BLK_DEV_RAM=y
++CONFIG_BLK_DEV_RAM_SIZE=35000
++CONFIG_NETDEVICES=y
++CONFIG_IBM_EMAC=y
++CONFIG_IBM_EMAC_RXB=256
++CONFIG_IBM_EMAC_TXB=256
++CONFIG_SERIAL_8250=y
++CONFIG_SERIAL_8250_CONSOLE=y
++CONFIG_SERIAL_8250_NR_UARTS=2
++CONFIG_SERIAL_8250_RUNTIME_UARTS=2
++CONFIG_SERIAL_8250_EXTENDED=y
++CONFIG_SERIAL_8250_SHARE_IRQ=y
++CONFIG_SERIAL_OF_PLATFORM=y
++CONFIG_I2C=y
++CONFIG_I2C_CHARDEV=y
++CONFIG_I2C_IBM_IIC=y
++CONFIG_SENSORS_AD7414=y
++# CONFIG_USB_SUPPORT is not set
++CONFIG_RTC_CLASS=y
++CONFIG_RTC_DRV_M41T80=y
++CONFIG_EXT2_FS=y
++CONFIG_EXT3_FS=y
++CONFIG_PROC_KCORE=y
++CONFIG_TMPFS=y
++CONFIG_CRAMFS=y
++CONFIG_NFS_FS=y
++CONFIG_ROOT_NFS=y
++CONFIG_NLS=y
++CONFIG_SATA_PMP=y
++CONFIG_SATA_DWC_PMP=y
++CONFIG_SCSI=y
++CONFIG_IKCONFIG=y
++CONFIG_IKCONFIG_PROC=y
++CONFIG_BLK_DEV_LOOP=y
++CONFIG_BLK_DEV_SD=y
++CONFIG_ATA=y
++CONFIG_MODULES=y
+diff --git a/arch/powerpc/platforms/44x/Kconfig b/arch/powerpc/platforms/44x/Kconfig
+index 5538e57..36f0357 100644
+--- a/arch/powerpc/platforms/44x/Kconfig
++++ b/arch/powerpc/platforms/44x/Kconfig
+@@ -30,6 +30,17 @@ config BLUESTONE
+ 	help
+ 	  This option enables support for the APM APM821xx Evaluation board.
+ 
++config APOLLO3G
++	bool "Apollo3g"
++	depends on 44x
++	default n
++	select PPC44x_SIMPLE
++	select APM821xx
++	select PPC4xx_PCI_EXPRESS
++	select IBM_EMAC_RGMII
++	help
++	  This option enables support for the WDC Apollo3G NAS.
++
+ config EBONY
+ 	bool "Ebony"
+ 	depends on 44x
+diff --git a/arch/powerpc/platforms/44x/ppc44x_simple.c b/arch/powerpc/platforms/44x/ppc44x_simple.c
+index 573c3d2..c4f2643 100644
+--- a/arch/powerpc/platforms/44x/ppc44x_simple.c
++++ b/arch/powerpc/platforms/44x/ppc44x_simple.c
+@@ -53,6 +53,7 @@ static char *board[] __initdata = {
+ 	"amcc,arches",
+ 	"amcc,bamboo",
+ 	"apm,bluestone",
++	"amcc,apollo3g",
+ 	"amcc,glacier",
+ 	"ibm,ebony",
+ 	"amcc,eiger",

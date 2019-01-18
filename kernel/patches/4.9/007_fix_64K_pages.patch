@@ -1,0 +1,11 @@
+--- a/arch/powerpc/kernel/setup-common.c	2017-06-07 10:08:04.000000000 +0000
++++ b/arch/powerpc/kernel/setup-common.c	2017-06-11 13:14:20.145588653 +0000
+@@ -911,7 +911,7 @@
+ 	init_mm.end_code = (unsigned long) _etext;
+ 	init_mm.end_data = (unsigned long) _edata;
+ 	init_mm.brk = klimit;
+-#ifdef CONFIG_PPC_64K_PAGES
++#if defined(CONFIG_PPC_64K_PAGES) && defined(CONFIG_PPC64)
+ 	init_mm.context.pte_frag = NULL;
+ #endif
+ #ifdef CONFIG_SPAPR_TCE_IOMMU
