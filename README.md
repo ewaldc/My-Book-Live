@@ -27,10 +27,10 @@ First install u-boot-tools:
 
 Then create /etc/fw_env.config:
 
-`cat >/etc/fw_env.config <<EOF`<br />
-`/dev/mtd0 0x1e000 0x1000 0x1000 1`<br /> 
-`/dev/mtd0 0x1f000 0x1000 0x1000 1`<br /> 
-`EOF`
+`cat >/etc/fw_env.config <<EOF<br />
+/dev/mtd0 0x1e000 0x1000 0x1000 1<br /> 
+/dev/mtd0 0x1f000 0x1000 0x1000 1<br /> 
+EOF`
 
 Now you can check your environment: 
 `fw_printenv`
