@@ -1,4 +1,21 @@
-# My-Book-Live
+# My-Book-Live netconsole
+
+## Introduction to netconsole ##
+First read about netconsole here: https://www.kernel.org/doc/Documentation/networking/netconsole.txt
+
+The WD MBL netconsole implementation requires the following:
+- netconsole enabled uboot files
+- netconsole enabled kernel
+- netconsole enabled Linux kernel patches and config file (if you want to compile your own kernel)
+
+DO NOT TEST THIS WITHOUT ABILITY TO TAKE YOUR DRIVE OUT AND HOOK TO A LINUX SYSTEM
+
+## Building a kernel with ntconsole support ##
+On WD MBL platforms this requires both a pacth as well as enabling netconfig in the kernel.
+Alternatively, download a precompiled, netconsole-enabled kernel
+
+
+##
 ## Building u-boot boot file using netconsole ##
 
 u-boot is looking for a boot file called `/boot/boot.scr`
@@ -13,8 +30,13 @@ EOF
 ```
 
 ## Building u-boot boot file with double netconsole support ##
+Test if you have the mkimage command, if not install it using `apt install u-boot-tools`:
+```
+mkimage -?
+apt install u-boot-tools
+```
 
-The u-boot [file](https://github.com/ewaldc/My-Book-Live/blob/master/uboot/boot_recovery_netconsole.txt) supports two netconsole windows and two network cards. Feel free to simplify.
+Then create your boot file using the u-boot template file [boot_recovery_netconsole.txt](https://github.com/ewaldc/My-Book-Live/blob/master/uboot/boot_recovery_netconsole.txt) supports two netconsole windows and two network cards. Feel free to simplify.
 
 First redirect u-boot output and input to 'nc' (default port 6666 used):
 
