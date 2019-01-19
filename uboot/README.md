@@ -123,7 +123,7 @@ Now you can check your environment:
 And set a variable: 
 `fw_setenv variable value`
 
-In this way a running operation system can feedback to u-boot that booting has successfully completed and there is no need to try a fallback boot image.  Additionally, it could fallback on TFTP/BOOTP boot.
+In this way a running operation system can feed back to u-boot that booting has successfully completed and there is no need to try a fallback boot image.  Additionally, it could fallback on TFTP/BOOTP boot.
 For this to work add following lines to `/etc/rc.local`:
 ```
 # Reset boot_counter after succesfull boot
