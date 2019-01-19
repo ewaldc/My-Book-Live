@@ -30,6 +30,9 @@ EOF
 ```
 
 ## Building u-boot boot file with double netconsole support ##
+Please note that the sample file assumes booting off an ext4 root partition on `/dev/sda2`.
+It's perfectly possible to boot off `/dev/sda1` using ext2/3 and keep a copy of the original firmware on `/dev/sda2`. See Debian Jessie [readme](https://github.com/ewaldc/My-Book-Live/blob/master/debian/debian%208%20(Jessie)/README.md) for more information.
+
 Test if you have the mkimage command, if not install it using `apt install u-boot-tools`:
 ```
 mkimage -?

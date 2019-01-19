@@ -14,7 +14,7 @@ The compressed tar [image](https://drive.google.com/open?id=1eCr4pyYLKAHId2QINgr
 - 20+ Debian patches for powerpc
 - u-boot tools
 
-## How to install on ext2/ext3? ##
+## How to install with ext2/ext3? ##
 
 make sure you have a solid backup (use dd to take an image backup)
 read the debrick/unbrick guide posted [here](https://community.wd.com/t/guide-how-to-unbrick-a-totally-dead-mbl/56658/545) and download unbrick software (just in case)
@@ -47,7 +47,7 @@ install the drive back into the MBL enclosure and boot
 personalize the installation
 change the root passwd (welc0me) using the `passwd` command
 
-rename your server as follows (xyz in the example)
+rename your NAS server as follows (xyz in the example)
 ```
 export hostname="myname"
 hostname $hostname
@@ -72,3 +72,8 @@ You will also need to configure users/groups (delete user ewald & tea), SAMBA pa
 NFS export is enabled, but you will need to modify exportfs.
 Your data partition should be untouched, it should be mounted on /DataVolume.
 In case you start with a new drive, I have optimized the kernel driver for solid performance on a regular 4K file system which is readable on any Linux server and much easier to backup. I posted some performance numbers earlier.
+
+It is still possible to go back to original FW by modifying `/boot/boot.scr` to boot off /dev/sda2
+
+## How to install with ext4 ? ##
+While MBL standard u-boot does not boot from ext4 (unless you upgrade u-boot), it is possible to have the root filesystem on ext4.  This will however
