@@ -23,7 +23,7 @@ First redirect u-boot output and input to 'nc' (default port 6666 used):
 Then set environment variables for IP and MAC addresses
 ```
 setenv ipaddr '<_MBL IP address_>'
-setenv ncIPLan '_PC LAN IP address_'
+setenv ncIPLan '<i>PC LAN IP address</i>'
 setenv ncMacLan '<_PC LAN MAC address_>'
 setenv ncIPWLan '<_PC WLAN IP address_>'
 setenv ncMacWLan '<_PC WLAN MAC address_>'
