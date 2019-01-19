@@ -19,35 +19,37 @@ The compressed tar [image](https://drive.google.com/open?id=1eCr4pyYLKAHId2QINgr
 Make sure you have a solid backup (use dd to take an image backup)<br>
 Read the debrick/unbrick guide posted [here](https://community.wd.com/t/guide-how-to-unbrick-a-totally-dead-mbl/56658/545) and download unbrick software (just in case)<br>
 Open the MBL enclosure carefully, take the drive out and mount on a Linux system (search for a video on how to do this).<br>
-Format the first partition on the drive e.g. /dev/sdc1 (or /dev/sdb1) in either ext2 or ext3:
+Format the first partition on the drive e.g. /dev/sdb1 (or /dev/sdc1) in either ext2 or ext3
+
+WARNING: THIS WILL ERASE ONE COPY OF THE ORIGINAL FW AND BREAK THE SOFTWARE RAID GROUP
 `
 mkfs.ext3 -m 1 /dev/sdb1 or (mkfs.ext2)`
 
 The second partition still should have the official MBL distro as it’s a software raid 1 copy
 mount the newly formatted partition
 `
-mount /dev/sdb1 /mnt/mbl`
+mkdir /mnt/mbl; mount /dev/sdb1 /mnt/mbl`
 
 go to the root of the mountpoint:
 
 `
 cd /mnt/mbl`
 
-install the Debian tar image:
+Copy the Debian tar image to your Linux system in `/tmp` and extract the files :
 
 `
 tar xzf /tmp/DebianJessie8.11.tgz`
 
-sync and unmount:
+Sync and unmount the MBL drive:
 
 `
 sync; umount /mnt/mbl`
 
-install the drive back into the MBL enclosure and boot
-personalize the installation
-change the root passwd (welc0me) using the `passwd` command
+Install the drive back into the MBL enclosure and boot<br>
+Personalize the installation:
+- change the root passwd (welc0me) using the `passwd` command
 
-rename your NAS server as follows (xyz in the example)
+- rename your NAS server as follows (xyz in the example)
 ```
 export hostname="myname"
 hostname $hostname
@@ -66,7 +68,7 @@ invoke-rc.d networking force-reload
 invoke-rc.d network-manager force-reload
 ```
 
-Create /etc/rsyncd.secrets if needed
+- create /etc/rsyncd.secrets if needed
 
 You will also need to configure users/groups (delete user ewald & tea), SAMBA partitions etc.
 NFS export is enabled, but you will need to modify exportfs.
