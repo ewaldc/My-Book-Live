@@ -14,7 +14,7 @@ EOF
 
 ## Building u-boot boot file with double netconsole support ##
 
-The u-boot file support two netconsole windows and two network cards. Feel free to simplify.
+The u-boot [file](https://github.com/ewaldc/My-Book-Live/blob/master/uboot/boot_recovery_netconsole.txt) supports two netconsole windows and two network cards. Feel free to simplify.
 
 First redirect u-boot output and input to 'nc' (default port 6666 used):
 
@@ -23,7 +23,7 @@ First redirect u-boot output and input to 'nc' (default port 6666 used):
 Then set environment variables for IP and MAC addresses
 ```
 setenv ipaddr '<_MBL IP address_>'
-setenv ncIPLan '<_PC LAN IP address_>'
+setenv ncIPLan '_PC LAN IP address_'
 setenv ncMacLan '<_PC LAN MAC address_>'
 setenv ncIPWLan '<_PC WLAN IP address_>'
 setenv ncMacWLan '<_PC WLAN MAC address_>'
