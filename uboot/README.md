@@ -10,6 +10,12 @@ The WD MBL netconsole implementation requires the following:
 
 DO NOT TEST THIS WITHOUT ABILITY TO TAKE YOUR DRIVE OUT AND HOOK TO A LINUX SYSTEM
 
+## What is "double" netconsole ##
+Double netconsole allows you to both
+- view (or, on Linux, interact with) the u-boot console
+- view (or, on Linux, interact with) the systems console
+In this way one can view boot errors, kernel boot errors as well as console messages. 
+
 ## Building a kernel with netconsole support ##
 On WD MBL platforms this requires both a patch as well as enabling netconfig in the kernel.
 Alternatively, download a precompiled, netconsole-enabled kernel [here](https://github.com/ewaldc/My-Book-Live/tree/master/kernel)
