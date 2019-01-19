@@ -20,19 +20,21 @@ First redirect u-boot output and input to 'nc' (default port 6666 used):
 
 `setenv nc 'setenv bootdelay 10; setenv stderr nc; setenv stdout nc; setenv stdin nc'`
 
-Then set environment variables for IP and MAC addresses
+Then set environment variables for IP and MAC addresses (substitute text between <>)
 ```
 setenv ipaddr '<_MBL IP address_>'
-setenv ncIPLan '<i>PC LAN IP address</i>'
-setenv ncMacLan '<_PC LAN MAC address_>'
-setenv ncIPWLan '<_PC WLAN IP address_>'
-setenv ncMacWLan '<_PC WLAN MAC address_>'
+setenv ncIPLan '<PC LAN IP address>'
+setenv ncMacLan '<PC LAN MAC address>'
+setenv ncIPWLan '<PC WLAN IP address>'
+setenv ncMacWLan '<PC WLAN MAC address>'
 ```
 
 If _boot_count_ variable is not yet defined, initialize to zero:
+
 `if itest -z "${boot_count}"; then setenv boot_count 0; fi`  
 
 Increase _boot_count_ variable (MBL u-boot version does not allow expressions):
+
 `if itest ${boot_count} == 0; then setenv boot_count 1; else setenv boot_count 2; fi`
 
 Save environment and enable netconsole redirection (evaluate nc variable)
@@ -51,11 +53,13 @@ setenv load_sata2 'sata init; ext2load sata 1:1 ${kernel_addr_r} /boot/uImage.sa
 setenv boot_sata 'run bootargs_lan addtty; bootm ${kernel_addr_r} - ${fdt_addr_r}'
 ```
 
-Print all u-boot variables (mostly for debugging)
+Print all u-boot variables (mostly for debugging):
+
 `printenv`
 
 If _boot_count_ == 2 then load recovery kernel, else load default kernel:
-```if itest ${boot_count} == 1; then echo "=== Loading Default Kernel ==="; run load_sata1; else echo "=== Loading Recovery Kernel ==="; run load_sata2; fi
+```
+if itest ${boot_count} == 1; then echo "=== Loading Default Kernel ==="; run load_sata1; else echo "=== Loading Recovery Kernel ==="; run load_sata2; fi
 run boot_sata
 ```
 
@@ -87,6 +91,6 @@ In this way a running operation system can feedback to u-boot that booting has s
 
 
 ## Netcat for windows ##
-See NetCatWindows.z
+See [NetCatWindows.z](https://github.com/ewaldc/My-Book-Live/blob/master/uboot/NetCatWindows.7z)
 
 Start two nc windows: `netconsole.bat` and `uboot_neconsole.bat`
