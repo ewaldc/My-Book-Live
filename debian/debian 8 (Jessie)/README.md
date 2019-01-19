@@ -14,30 +14,32 @@ The compressed tar [image](https://drive.google.com/open?id=1eCr4pyYLKAHId2QINgr
 - 20+ Debian patches for powerpc
 - u-boot tools
 
-## How to install ? ##
+## How to install on ext2/ext3? ##
 
 make sure you have a solid backup (use dd to take an image backup)
 read the debrick/unbrick guide posted [here](https://community.wd.com/t/guide-how-to-unbrick-a-totally-dead-mbl/56658/545) and download unbrick software (just in case)
 open the MBL enclosure carefully, take the drive out and mount on a Linux system (search for a video on how to do this)
 format the first partition on the drive e.g. /dev/sdc1 (or /dev/sdb1) in either ext2 or ext3:
-
-'
-mkfs.ext3 -m 1 /dev/sdb1 or (mkfs.ext2)'
+`
+mkfs.ext3 -m 1 /dev/sdb1 or (mkfs.ext2)`
 
 the second partition still should have the official MBL distro as it’s a software raid 1 copy
 mount the newly formatted partition
 `
 mount /dev/sdb1 /mnt/mbl`
 
-go to the root of the mountpoint
+go to the root of the mountpoint:
+
 `
 cd /mnt/mbl`
 
-install the Debian tar image
+install the Debian tar image:
+
 `
 tar xzf /tmp/DebianJessie8.11.tgz`
 
-sync and unmount
+sync and unmount:
+
 `
 sync; umount /mnt/mbl`
 
