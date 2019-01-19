@@ -31,11 +31,13 @@ setenv ncMacWLan '<PC WLAN MAC address>'
 
 If _boot_count_ variable is not yet defined, initialize to zero:
 
-`if itest -z "${boot_count}"; then setenv boot_count 0; fi`  
+`
+if itest -z "${boot_count}"; then setenv boot_count 0; fi`  
 
 Increase _boot_count_ variable (MBL u-boot version does not allow expressions):
 
-`if itest ${boot_count} == 0; then setenv boot_count 1; else setenv boot_count 2; fi`
+`
+if itest ${boot_count} == 0; then setenv boot_count 1; else setenv boot_count 2; fi`
 
 Save environment and enable netconsole redirection (evaluate nc variable)
 ```
