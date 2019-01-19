@@ -10,9 +10,9 @@ The WD MBL netconsole implementation requires the following:
 
 DO NOT TEST THIS WITHOUT ABILITY TO TAKE YOUR DRIVE OUT AND HOOK TO A LINUX SYSTEM
 
-## Building a kernel with ntconsole support ##
-On WD MBL platforms this requires both a pacth as well as enabling netconfig in the kernel.
-Alternatively, download a precompiled, netconsole-enabled kernel
+## Building a kernel with netconsole support ##
+On WD MBL platforms this requires both a patch as well as enabling netconfig in the kernel.
+Alternatively, download a precompiled, netconsole-enabled kernel [here](https://github.com/ewaldc/My-Book-Live/tree/master/kernel)
 
 
 ##
