@@ -29,7 +29,7 @@ But there are also some disadvantages
 * Jumbo frame support in Linux 2.6.32.7x is not totally stable.  It needs a watchdog to reset the LAN when it hangs.  However, the kernel has stayed up for more than year under stress with almost no memory leakage
 * Having a root and/or user filesystem with 64K block size makes it virtually unreadable on other Linux systems.  There is willingness to give up some performance for flexibility and portability
 
-At this moment, the most performant Linux 4.x kernel is 4.9.  It's a kernel with extended support life (LTS) and the best balance between size and supportability.  Please note that at this moment no other active kernel  kernel has a longer support life according to Greg Kroah-Hartman on this releases [page](https://www.kernel.org/releases.html)
+At this moment, the most performant, up-to-date and fully supported Linux 4.x kernel is 4.9.  It's a kernel with extended support life (LTS) and the best balance between size and supportability.  Please note that at this moment no other active kernel  kernel has a longer support life according to Greg Kroah-Hartman on this releases [page](https://www.kernel.org/releases.html)
 
 With a 4.9.x customer kernel, standard 4K ext4 file system, Debian 8.11, page size of 64K, network MTU size of 4088, one can expect:
 * Sequential disk reads of 170MB/s (dd if=tst.dd of=/dev/null bs=1M count=1K)
