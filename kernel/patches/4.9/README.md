@@ -61,6 +61,13 @@ done
 
 Watch for any failed patches. Please accept my apologies if you hit an error and submit an issue...
 
+Copy one of the sample confg files from [here](https://github.com/ewaldc/My-Book-Live/tree/master/kernel/patches/4.9/config) and duplicate as .confg:<br>
+`cp config_netconsole_4.9.149 .config`
+
+Build the kernel:<br>
+`make uimage`
+
+
 ## Kernel 4.9.x performance ##
 With a 4.9.x customer kernel, standard 4K block size ext4 file system, Debian 8.11, page size of 64K, network MTU size of 4088, one can expect:
 * Sequential disk reads of 170MB/s (dd if=tst.dd of=/dev/null bs=1M count=1K)
