@@ -22,4 +22,4 @@ The main reasons for this are:
 * Kernel 2.6.x is lean and mean, hence small and fast
 * Debian 6 (Lenny) and 7 (Wheezy) are relatively simple and close to system V unix
 * Debian Jessie is clearly a newer generation Linux: very stable but bigger, highly functional at the expense of more baseline processes and more memory consumption.  It's also more complex to administer (e.g. system.d)
-* More recent kernels have grown in size (e.g. due to more common code) and complexity.  While powerPC 32 is still supported, general code is more optimized and tested for modern, 64-bit architectures.  Hence, with each new release, the amount of patches needed to make things work reliably and at comparable performance is growing. 
+* More recent kernels have grown in size (e.g. due to more common code) and complexity.  While PowerPC 32 is still supported, general code is more optimized and tested for modern, 64-bit architectures.  Hence, with each new release, the amount of patches needed to make things work reliably and at comparable performance is growing. 
