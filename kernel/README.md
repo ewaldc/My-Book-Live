@@ -2,7 +2,7 @@
 
 ## Tree structure ##
 
-- __dts__: Device Tree Structurem files and how to build them
+- __dts__: Device Tree Structure files compatible with posted kernels/patch sources and how to build them
 - __patches__: Build your own kernel for My Book Live (stable kernels and early releases)
 - __precompiled__: Install pre-compiled kernels - The easy way...
 
