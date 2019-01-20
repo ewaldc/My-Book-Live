@@ -79,10 +79,10 @@ It is still possible to go back to original FW by modifying `/boot/boot.scr` to 
 
 ## How to install with ext4 ? ##
 While MBL standard u-boot does not boot from ext4 (unless you upgrade u-boot), it is possible to have the root filesystem on ext4.  There are two ways to achive this:
-- format /dev/sda1 to (a small sized) ext3, containing only /boot (kernel, boot.scr, apollo3g.dtb + eventually fall back copies of these files).  This provides extra room for a 2GB+ /dev/sda2 which then contains the root filesystem minus /boot, but including /lib/modules (loadable kernel modules)
+- format /dev/sda1 to (a small sized) ext3, containing only /boot (kernel, boot.scr, apollo3g.dtb + eventually fallback copies of these files).  This mini boot filesystem provides extra room for a 2GB+ /dev/sda2 which then contains the root filesystem minus /boot, but including /lib/modules (loadable kernel modules)
 - boot off TFTP with a initramfs enabled kernel which contains /boot.  This allows for a 4GB sized /dev/sda1 (/dev/sda2 can then be removed) or alternatively, to keep a copy of the original firmware on /dev/sda2 while hosting Debian Jessie 8.11 on /dev/sda1 (and the choice to boot either configuration)
 
-Advanatges of using an ext4-only configuration include:
+Advantages of using an ext4-only configuration include:
 - smaller kernel (ext2/ext3 support can be removed)
 - better overall performance
 - better reliency
