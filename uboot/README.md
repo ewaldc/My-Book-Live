@@ -10,7 +10,7 @@ The WD MBL netconsole implementation requires the following:
 
 DO NOT TEST THIS WITHOUT ABILITY TO TAKE YOUR DRIVE OUT AND HOOK TO A LINUX SYSTEM
 
-## What is "double" netconsole ##
+## What is "double" netconsole ? ##
 Double netconsole allows you to both
 - view (or, on Linux, interact with) the u-boot console
 - view (or, on Linux, interact with) the systems console
