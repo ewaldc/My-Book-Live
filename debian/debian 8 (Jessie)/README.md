@@ -21,7 +21,7 @@ Read the debrick/unbrick guide posted [here](https://community.wd.com/t/guide-ho
 Open the MBL enclosure carefully, take the drive out and mount on a Linux system (search for a video on how to do this).<br>
 Format the first partition on the drive e.g. /dev/sdb1 (or /dev/sdc1) in either ext2 or ext3
 
-WARNING: THIS WILL ERASE ONE COPY OF THE ORIGINAL FW AND BREAK THE SOFTWARE RAID GROUP
+WARNING: THIS WILL ERASE ONE COPY OF THE ORIGINAL FW AND BREAK THE SOFTWARE RAID GROUP<br>
 `
 mkfs.ext3 -m 1 /dev/sdb1 or (mkfs.ext2)`
 
@@ -30,25 +30,21 @@ mount the newly formatted partition
 `
 mkdir /mnt/mbl; mount /dev/sdb1 /mnt/mbl`
 
-go to the root of the mountpoint:
-
+go to the root of the mountpoint:<br>
 `
 cd /mnt/mbl`
 
-Copy the Debian tar image to your Linux system in `/tmp` and extract the files :
-
+Copy the Debian tar image to your Linux system in `/tmp` and extract the files:<br>
 `
 tar xzf /tmp/DebianJessie8.11.tgz`
 
-Sync and unmount the MBL drive:
-
+Sync and unmount the MBL drive:<br>
 `
 sync; umount /mnt/mbl`
 
 Install the drive back into the MBL enclosure and boot<br>
 Personalize the installation:
 - change the root passwd (welc0me) using the `passwd` command
-
 - rename your NAS server as follows (`myname` in the example)
 ```
 export hostname="myname"
