@@ -2,7 +2,7 @@
 
 ## Which kernel to take ? ##
 
-All kernels listed below here have survived a 96-hours torture test.  Other kernels posted versions are not fully validated (yet).  Anyhow, none of them are officially supported, so this is __always on your own risk__.
+All kernels listed below here have survived a 96-hours torture test.  Other kernels posted versions are not fully validated (yet).  Anyhow, none of them are officially supported, so this is __always at your own risk__.
 
 ## Validated kernels ##
 * 4.9.77: this kernel is part of the posted Debian Jessie 8.11 image and extremely stable
