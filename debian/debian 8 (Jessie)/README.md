@@ -85,4 +85,4 @@ While MBL standard u-boot does not boot from ext4 (unless you upgrade u-boot), i
 Advantages of using an ext4-only configuration include:
 - smaller kernel (ext2/ext3 support can be removed)
 - better overall performance
-- better reliency
+- better resiliency
