@@ -31,6 +31,9 @@ The latest version of the patches include:
 Install all the tools required for kernel building and creation of the u-boot bootloader entrypoint.<br>
 `apt-get install ca-certificates build-essential uboot-mkimage ncurses-dev unzip`
 
+If you are using Windows, make sure you have tools to log into the My Book Live and copy files.
+My favorites are [kitty](http://www.9bis.net/kitty/) (a portable fork from putty which auto-reconnects after a reboot) and [WinSCP](https://winscp.net/eng/download.php)
+ 
 Download the 4.9 kernel of your choice:
 * using github: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git.  For example clone https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/tree/?h=v4.9.149
 * download the latest compressed tarball: https://www.kernel.org/
@@ -50,7 +53,7 @@ cd ..
 ```
 
 Make patch directory: `mkdir patches`<br>
-Download [patches](https://github.com/ewaldc/My-Book-Live/blob/master/kernel/patches/4.9/patches/patches.7z) and extract to the patches directory.  Apply the patches:
+Download [patches](https://github.com/ewaldc/My-Book-Live/blob/master/kernel/patches/4.9/patches/patches.7z) , extract to the patches directory and apply:
 ```  
 for i in $(ls patches/[0-9]*)
 do
