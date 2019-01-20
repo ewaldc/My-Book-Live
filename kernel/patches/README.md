@@ -19,7 +19,7 @@ Nothings beats Debian Wheezy and custom kernel 2.6.32.70/71 with page size of 64
 
 The main reasons for this are:
 * The custom 2.6.32.70/71 kernel has support for DMA, splice with DMA, modification to standard Linux network stack, NCQ data support, support for MSI, OCM, TAH, MAL, hardware TSO (checksum offloading),  Interrupt Coalescing, SYSFS, Mask Carrier Extension signals, Powerdown mode, WOL (wake on LAN) support, Broadcom NIC 54610 tuning etc.
-* Kernel 2.6.x is lean and mean and does small and fast
-* Debian Lennie/Wheezy are relatively simple and close to system V unix
+* Kernel 2.6.x is lean and mean, hence small and fast
+* Debian 6 (Lenny) and 7 (Wheezy) are relatively simple and close to system V unix
 * Debian Jessie is clearly a newer generation Linux: very stable but bigger, highly functional at the expense of more baseline processes and more memory consumption.  It's also more complex to administer (e.g. system.d)
 * More recent kernels have grown in size (e.g. due to more common code) and complexity.  While powerPC 32 is still supported, general code is more optimized and tested for modern, 64-bit architectures.  Hence, with each new release, the amount of patches needed to make things work reliably and at comparable performance is growing. 
