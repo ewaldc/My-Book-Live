@@ -42,7 +42,7 @@ With a 4.9.x customer kernel, standard 4K block size ext4 file system, Debian 8.
 
 Since My Book Live is based on a 2009 32-bit architecture, it makes no sense to focus on kernels that are not Long Term Support releases.  That limits the choice to 4.14 and 4.19.
 
-Kernel 4.14 has some nice new functions but requires many patches (just take a look at OpenWRT team patches for 18.06.1 for just about any router). Despite all the patches, tremendoes work from the OpenWRT team, I have not been able to keep this kernel running for more than a week under torture test.  Performance-wise it mostly under-performs 4.9.x.   At this moment 4.19 is the most promising kernel.
+Kernel 4.14 has some nice new functions but requires many patches (just take a look at OpenWRT team patches for 18.06.1 for just about any router). Despite all the patches, tremendoes work from the OpenWRT team, I have not been able to keep this kernel running for more than a week under torture test.  Performance-wise it mostly under-performs 4.9.x.   At this moment 4.19 is the most promising kernel, but it will requires substantional amounts of work to get everything ported.
 
 Another development route is to further tune 4.9 performance and bring in new functions like:
 * DMA hardware support
