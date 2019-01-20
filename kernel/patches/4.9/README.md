@@ -65,7 +65,7 @@ Copy one of the sample confg files from [here](https://github.com/ewaldc/My-Book
 `cp config_netconsole_4.9.149 .config`
 
 Build the kernel:<br>
-`make uimage`
+`make uImage`
 
 
 ## Kernel 4.9.x performance ##
