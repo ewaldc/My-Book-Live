@@ -11,7 +11,7 @@ The compressed tar [image](https://drive.google.com/open?id=1eCr4pyYLKAHId2QINgr
 - kernel 4.9.99 pre-compiled
 - SAMBA 4.x patched for performance
 - NFS 4.x enabled
-- 20+ Debian patches for powerpc
+- 20+ Debian patches for powerpc not included in upstream Debian
 - u-boot tools
 
 ## How to install with ext2/ext3? ##
