@@ -25,8 +25,8 @@ The main reasons for this are:
 * More recent kernels have grown in size (e.g. due to more common code) and complexity.  While PowerPC 32 is still supported, general code is more optimized and tested for modern, 64-bit architectures.  Hence, with each new release, the amount of patches needed to make things work reliably and at comparable performance is growing. 
 
 But there are also some disadvantages
-* The desire of many users to run operating systems and kernels for support and security reasons
-* Jumbo frame support in Linux 2.6.32.7x is not totally stable.  It needs a watchdog to reset the LAN when it hangs.  However, the kernel has stayed up for more than year under stress with almost no memory leak
+* The desire of many users to run recent operating systems and kernels for support and security reasons
+* Jumbo frame support in Linux 2.6.32.7x is not totally stable.  It needs a watchdog to reset the LAN when it hangs.  However, the kernel has stayed up for more than year under stress with almost no memory leakage
 * Having a root and/or user filesystem with 64K block size makes it virtually unreadable on other Linux systems.  There is willingness to give up some performance for flexibility and portability
 
 At this moment, the most performant Linux 4.x kernel is 4.9.  It's a kernel with extended support life (LTS) and the best balance between size and supportability.  Please note that at this moment no other active kernel  kernel has a longer support life according to Greg Kroah-Hartman on this releases [page](https://www.kernel.org/releases.html)
