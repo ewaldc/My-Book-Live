@@ -32,7 +32,7 @@ Install all the tools required for kernel building and creation of the u-boot bo
 `apt-get install ca-certificates build-essential uboot-mkimage ncurses-dev unzip`
 
 If you are using Windows, make sure you have tools to log into the My Book Live and copy files.
-My favorites are [kitty](http://www.9bis.net/kitty/) (a portable fork from putty which auto-reconnects after a reboot) and [WinSCP](https://winscp.net/eng/download.php)
+My favorites are [kitty](http://www.9bis.net/kitty/) (a portable fork of putty which auto-reconnects after a reboot) and [WinSCP](https://winscp.net/eng/download.php)
  
 Download the 4.9 kernel of your choice:
 * using github: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git.  For example clone https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/tree/?h=v4.9.149
@@ -64,7 +64,7 @@ done
 
 Watch for any failed patches. Please accept my apologies if you hit an error and submit an issue...
 
-Copy one of the sample confg files from [here](https://github.com/ewaldc/My-Book-Live/tree/master/kernel/patches/4.9/config) and duplicate as .confg:<br>
+Copy one of the sample config files from [here](https://github.com/ewaldc/My-Book-Live/tree/master/kernel/patches/4.9/config) and duplicate as .config. Alternative build your own config file using `make menuconfig`:<br>
 `cp config_netconsole_4.9.149 .config`
 
 Build the kernel, resolve some potentional config file questions, and ... get a coffee/beer:<br>
