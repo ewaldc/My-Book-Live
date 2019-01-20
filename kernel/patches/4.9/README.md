@@ -79,6 +79,8 @@ export KERNEL_VERSION=$(echo $PWD|cut -d"-" -f 2)
 cp arch/powerpc/boot/uImage /boot/uImage_$KERNEL_VERSION
 ```
 
+Now you have succesfully build the kernel, keep in mind that none of these kernels are officially supported, so what follows is __always on your own risk__.
+
 Make sure your `/boot/boot.scr` and `/boot/apollo3g.dtb` are compatible with the new kernel.<br>
 Put new kernel in place, make sure you have copied the original one:<br>
 ```
