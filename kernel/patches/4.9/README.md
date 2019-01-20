@@ -64,8 +64,31 @@ Watch for any failed patches. Please accept my apologies if you hit an error and
 Copy one of the sample confg files from [here](https://github.com/ewaldc/My-Book-Live/tree/master/kernel/patches/4.9/config) and duplicate as .confg:<br>
 `cp config_netconsole_4.9.149 .config`
 
-Build the kernel:<br>
+Build the kernel, resolve some potentional config file questions, and ... get a coffee/beer:<br>
 `make uImage`
+
+Build the modules:<br>
+`make modules; make modules_install`
+
+Copy the kernel and modules:<br>
+```
+export KERNEL_VERSION=$(echo $PWD|cut -d"-" -f 2)
+cp arch/powerpc/boot/uImage /boot/uImage_$KERNEL_VERSION
+```
+
+Make sure your `/boot/boot.scr` and `/boot/apollo3g.dtb` are compatible with the new kernel.<br>
+Put new kernel in place, make sure you have copied the original one:<br>
+```
+mv /boot/uImage /boot/uImage.bck
+ln /boot/uImage_$KERNEL_VERSION /boot/uImage
+```
+
+Reboot, make sure your netconsole windows are ready and ... good luck:<br>
+`systemctl reboot`
+
+
+
+
 
 
 ## Kernel 4.9.x performance ##
