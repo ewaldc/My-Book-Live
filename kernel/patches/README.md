@@ -1,4 +1,4 @@
-# My-Book-Live kernels
+# Building My-Book-Live kernels
 
 ## Which kernel to build ? ##
 
