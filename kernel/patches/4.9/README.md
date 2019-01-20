@@ -34,14 +34,32 @@ Install all the tools required for kernel building and creation of the u-boot bo
 Download the 4.9 kernel of your choice:
 * using github: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git.  For example clone https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/tree/?h=v4.9.149
 * download the latest compressed tarball: https://www.kernel.org/
-* download a version of your choice in compressed tar format (gz or xz): https://mirrors.edge.kernel.org/pub/linux/kernel/v4.x/
+* download a version of your choice in compressed tar format (gz or xz, xz preferred as it is the smaller size): https://mirrors.edge.kernel.org/pub/linux/kernel/v4.x/
 
 Uncompress the kernel:
 * in .gz format: `tar -xzf linux-4.9.149.tar.gz`
 * in .xz format: `tar -xJf linux-4.9.149.tar.xz`
 
+Change active directory: `cd linux-4.9.149`
+Optionaly, save some disk space by deleting uneeded architectures:
+```
+cd arch
+rm -rf [a-j]*; rm -rf [l-o]*; rm -rf parisc unicore32 xtensa
+rm -rf [s-t]*; rm -rf x86/[a-c]* x86/events x86/[f-p]* x86/[t-x]* x86/realmode
+cd ..
+```
 
+Make patch directory: `mkdir patches`
+Download [patches](https://github.com/ewaldc/My-Book-Live/blob/master/kernel/patches/4.9/patches/patches.7z) and extract to the patches directory.  Apply the patches:
+```  
+for i in $(ls patches/[0-9]*)
+do
+  echo "#### $i ####"
+  patch -p 1 -b -i $i
+done
+```
 
+Watch for any failed patches. Apologies if you hit an error.  Please submit an issue...
 
 ## Kernel 4.9.x performance ##
 With a 4.9.x customer kernel, standard 4K block size ext4 file system, Debian 8.11, page size of 64K, network MTU size of 4088, one can expect:
