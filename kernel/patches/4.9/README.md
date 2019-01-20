@@ -31,12 +31,12 @@ The latest version of the patches include:
 Install all the tools required for kernel building and creation of the u-boot bootloader entrypoint.<br>
 `apt-get install ca-certificates build-essential uboot-mkimage ncurses-dev unzip`
 
-Download the 4.9 kernel of your choice
-* using github: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+Download the 4.9 kernel of your choice:
+* using github: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git.  For example clone https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/tree/?h=v4.9.149
 * download the latest compressed tarball: https://www.kernel.org/
 * download a version of your choice in compressed tar format (gz or xz): https://mirrors.edge.kernel.org/pub/linux/kernel/v4.x/
 
-Uncompress the kernel<br>
+Uncompress the kernel:
 * in .gz format: `tar -xzf linux-4.9.149.tar.gz`
 * in .xz format: `tar -xJf linux-4.9.149.tar.xz`
 
