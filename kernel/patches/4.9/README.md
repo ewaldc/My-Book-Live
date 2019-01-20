@@ -11,6 +11,9 @@ Following versions have been validated as "excellent":
 * 4.9.119
 * 4.9.135
 
+Pre-4.9.31 versions are to be avoided for stability reasons. Versions post 4.9.135 are most likely fine.
+Current version under test: 4.9.149
+
 ## What's included ##
 The latest version of the patches include:
 * sata driver with NCQ support (disabled by default since it provided no extra performance on 4.9)
@@ -25,8 +28,19 @@ The latest version of the patches include:
 * Linux Skbuff performance tuning
 
 ## Building the kernel ##
-In our chroot, we now install all the tools we require for kernel building and creation of th eu-boot bootloader entrypoint.<br>
+Install all the tools required for kernel building and creation of the u-boot bootloader entrypoint.<br>
 `apt-get install ca-certificates build-essential uboot-mkimage ncurses-dev unzip`
+
+Download the 4.9 kernel of your choice
+* using github: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+* download the latest compressed tarball: https://www.kernel.org/
+* download a version of your choice in compressed tar format (gz or xz): https://mirrors.edge.kernel.org/pub/linux/kernel/v4.x/
+
+Uncompress the kernel<br>
+* in .gz format: `tar -xzf linux-4.9.149.tar.gz`
+* in .xz format: `tar -xJf linux-4.9.149.tar.xz`
+
+
 
 
 ## Kernel 4.9.x performance ##
