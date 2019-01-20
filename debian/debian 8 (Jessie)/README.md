@@ -1,7 +1,7 @@
 # My-Book-Live Debian Jessie 8.11
 
 ## What's included ? ##
-The compressed tar [image](https://drive.google.com/open?id=1eCr4pyYLKAHId2QINgrGdd9GWCsWVGQG) contains:
+The compressed tar [__image__](https://drive.google.com/open?id=1eCr4pyYLKAHId2QINgrGdd9GWCsWVGQG) contains:
 - Debian 8.11
 - Security post 8.11 patches backported to PowerPC
 - MiniDLNA
