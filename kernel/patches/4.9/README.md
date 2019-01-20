@@ -1,5 +1,16 @@
 # My-Book-Live kernel 4.9.x
 
+## Validated versions ##
+There is a reasonable chance these patches work with any 4.9.x version.
+However, practical experience has shown not every version is equally stable and/or performing.
+Following versions have validated as "excellent":
+* 4.9.33
+* 4.9.44
+* 4.9.77
+* 4.9.99
+* 4.9.119
+* 4.9.135
+
 ## What's included ##
 The latest version of the patches include:
 * sata driver with NCQ support (disabled by default since it provided no extra performance on 4.9)
@@ -16,7 +27,6 @@ The latest version of the patches include:
 ## Building the kernel ##
 In our chroot, we now install all the tools we require for kernel building and creation of th eu-boot bootloader entrypoint.<br>
 `apt-get install ca-certificates build-essential uboot-mkimage ncurses-dev unzip`
-
 
 
 ## Kernel 4.9.x performance ##
