@@ -49,7 +49,7 @@ Install the drive back into the MBL enclosure and boot<br>
 Personalize the installation:
 - change the root passwd (welc0me) using the `passwd` command
 
-- rename your NAS server as follows (xyz in the example)
+- rename your NAS server as follows (`myname` in the example)
 ```
 export hostname="myname"
 hostname $hostname
