@@ -3,7 +3,7 @@
 ## Which kernel to build ? ##
 
 We have build 2.x, 3x and 4.x kernels but ultimately there is only one top level choice to make:
-* _"I want to keep the original OEM software because of it's web user interface and vendor support"_:<br> in that case the only custom kernel available is 2.6.32.70/71.  You will find the patch in source code [here](https://github.com/ewaldc/My-Book-Live/tree/master/kernel/patches/2.6.32).  It will provide a considerable performance improvement over standard software, up to 2x on certain tests.
+* _"I want to keep the original OEM software because of it's web user interface and vendor support"_<br>In that case the only custom kernel available is 2.6.32.70/71.  You will find the patch in source code [here](https://github.com/ewaldc/My-Book-Live/tree/master/kernel/patches/2.6.32).  It will provide a considerable performance improvement over standard software, up to 2x on certain tests.
 * _"I would like to run a more recent version of Debian than the Debian 6 (Lenny) version that comes with the original Western Digital firmware (e.g. for security or recent package support reasons)"_.  You have two choices:
 	* Debian 7 (Wheezy):  run custom kernel 2.6.32.70/71, more recent versions won't boot without extensive changes to kernel code (3.x, 4.x).  It's possible though, but it makes little sense IMHO for support and performance reasons (contact me if your feel different)
 	* Debian 8 (Jessie):  all 4.x kernels work
