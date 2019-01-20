@@ -31,12 +31,12 @@ But there are also reasons to consider other alternatives:
 
 At this moment, the most performant, up-to-date and fully supported Linux 4.x kernel is 4.9.  It's a kernel with extended support life (LTS) and the best balance between size and supportability.  Please note that at this moment no other active kernel  kernel has a longer support life according to Greg Kroah-Hartman on this releases [page](https://www.kernel.org/releases.html)
 
-With a 4.9.x customer kernel, standard 4K ext4 file system, Debian 8.11, page size of 64K, network MTU size of 4088, one can expect:
+With a 4.9.x customer kernel, standard 4K block size ext4 file system, Debian 8.11, page size of 64K, network MTU size of 4088, one can expect:
 * Sequential disk reads of 170MB/s (dd if=tst.dd of=/dev/null bs=1M count=1K)
 * Sequential disk writes of 100MB/s (dd if=/dev/zero of=tst.dd  bs=1M count=1K)
 * Samba read speed of 116 MB/s (1GB file read, Windows 10 64-bit)
 * Samba write speed of 85 MB/s (1GB file write, Windows 10 64-bit)
-* over 400 days of uptime as measure on our production NAS
+* over 400 days of uptime as measured on a My Book Live NAS used in a muti-user production environment
 
 ## New development - how about newer 4.x kernel releases ? ##
 
