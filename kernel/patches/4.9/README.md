@@ -40,7 +40,7 @@ Uncompress the kernel:
 * in .gz format: `tar -xzf linux-4.9.149.tar.gz`
 * in .xz format: `tar -xJf linux-4.9.149.tar.xz`
 
-Change active directory: `cd linux-4.9.149`
+Change active directory: `cd linux-4.9.149`<br>
 Optionaly, save some disk space by deleting uneeded architectures:
 ```
 cd arch
@@ -49,7 +49,7 @@ rm -rf [s-t]*; rm -rf x86/[a-c]* x86/events x86/[f-p]* x86/[t-x]* x86/realmode
 cd ..
 ```
 
-Make patch directory: `mkdir patches`
+Make patch directory: `mkdir patches`<br>
 Download [patches](https://github.com/ewaldc/My-Book-Live/blob/master/kernel/patches/4.9/patches/patches.7z) and extract to the patches directory.  Apply the patches:
 ```  
 for i in $(ls patches/[0-9]*)
@@ -59,7 +59,7 @@ do
 done
 ```
 
-Watch for any failed patches. Apologies if you hit an error.  Please submit an issue...
+Watch for any failed patches. Please accept my apologies if you hit an error and submit an issue...
 
 ## Kernel 4.9.x performance ##
 With a 4.9.x customer kernel, standard 4K block size ext4 file system, Debian 8.11, page size of 64K, network MTU size of 4088, one can expect:
