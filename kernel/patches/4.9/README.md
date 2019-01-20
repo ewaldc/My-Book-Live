@@ -2,8 +2,8 @@
 
 ## Validated versions ##
 There is a reasonable chance these patches work with any 4.9.x version.
-However, practical experience has shown not every version is equally stable and/or performing.
-Following versions have validated as "excellent":
+However, practical experience has shown that not every version is equally stable and/or performing.
+Following versions have been validated as "excellent":
 * 4.9.33
 * 4.9.44
 * 4.9.77
