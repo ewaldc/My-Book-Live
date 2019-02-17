@@ -1,5 +1,8 @@
 # My-Book-Live
-Kernel patches and Debian release for Western Digital My Book Live
+Kernel patches and Debian release for Western Digital My Book Live.
+Documentation is posted within each section.
+Please note that none of this work is tested on a My Book Live DUO for the simple reason that we don't own one.
+
 ## Tree Structure ##
 
 
