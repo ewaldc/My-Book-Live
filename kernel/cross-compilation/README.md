@@ -15,4 +15,6 @@ For a full script that compiles the kernel, modules and transfers everything bac
 You need to customize the location of the toolchain and the name of your NAS.
 Additionally you need to enable ssh and sftp to automatically log in your NAS as root.
 
+On a 4-core CPU with SSD, it takes less then 1 minute to fully compile the kernel and about 2 seconds to update a single source file.
+
 
