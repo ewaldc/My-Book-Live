@@ -1,16 +1,22 @@
 setenv nc 'setenv bootdelay 10; setenv stderr nc; setenv stdout nc; setenv stdin nc'
-setenv ncip 192.168.1.20
-setenv ipaddr 192.168.1.6
+setenv ipaddr '192.168.1.6'
+setenv ncIPWLan '192.168.1.10'
+setenv ncMacWLan '60:57:18:FD:30:D1'
+setenv ncIPLan '192.168.1.20'
+setenv ncMacLan '3c:a8:2a:84:b6:37'
+
 if itest -z "${boot_count}"; then setenv boot_count 0; fi  
 if itest ${boot_count} == 0; then setenv boot_count 1; else setenv boot_count 2; fi
 saveenv
 run nc
-setenv bootargs_lan 'setenv bootargs netconsole=6663@${ipaddr}/,6664@${ncip}/3c:a8:2a:84:b6:37 root=/dev/sda2 earlyprintk rw rootfstype=ext4 rootflags=data=ordered'
-setenv bootargs_wlan 'setenv bootargs netconsole=6663@${ipaddr}/,6664@${ncip}/60:57:18:FD:30:D1 root=/dev/sda2 earlyprintk rw rootfstype=ext4 rootflags=data=ordered'
+setenv bootargs 'root=/dev/sda2 earlycon earlyprintk rw rootfstype=ext4 rootflags=data=ordered ipv6.disable=1'
+setenv debugargs 'setenv bootargs debug rootdelay=5 panic=10 debug ignore_loglevel log_buf_len=1M ${bootargs}'
+setenv bootargs_lan 'setenv bootargs netconsole=6663@${ipaddr}/,6664@${ncIPLan}/${ncMacLan} ${bootargs}'
+setenv bootargs_wlan 'setenv bootargs netconsole=6663@${ipaddr}/,6664@${ncIPWLan}/${ncMacWLan} ${bootargs}'
 setenv load_sata1 'sata init; ext2load sata 1:1 ${kernel_addr_r} /boot/uImage; ext2load sata 1:1 ${fdt_addr_r} /boot/apollo3g.dtb'
 setenv load_sata2 'sata init; ext2load sata 1:1 ${kernel_addr_r} /boot/uImage.safe; ext2load sata 1:1 ${fdt_addr_r} /boot/apollo3g.safe.dtb'
 setenv boot_sata 'run bootargs_lan addtty; bootm ${kernel_addr_r} - ${fdt_addr_r}'
 
-printenv
 if itest ${boot_count} == 1; then echo "=== Loading Default Kernel ==="; run load_sata1; else echo "=== Loading Recovery Kernel ==="; run load_sata2; fi
+printenv
 run boot_sata
