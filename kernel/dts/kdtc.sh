@@ -6,10 +6,10 @@ do_dtc(){
 	cpp $CPP_OPTS $1.dts | dtc -O dtb -I dts -o $1.dtb - || chmod 644 $1.dtb
 }
 
+# Add your source files here
 do_dtc apollo3g
 do_dtc apollo3g_duo
-do_dtc apollo3g_eco
-do_dtc apollo3g_duo_eco
+
 
 exit
 #cpp -nostdinc -x assembler-with-cpp -I ../arch/powerpc/boot/dts -I ../arch/powerpc/boot/dts/include -undef -D__DTS__ -o Apollo3g.tmp apollo3g.dts
