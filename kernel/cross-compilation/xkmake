@@ -1,0 +1,4 @@
+#!/bin/sh
+# Customize path to toolchain
+export PATH="~/toolchain-powerpc_464fp_gcc-7.4.0_musl/bin:${PATH}"
+exec make ARCH="powerpc" CROSS_COMPILE="powerpc-openwrt-linux-musl-" INSTALL_MOD_PATH="${SYSROOT}" "$@"
