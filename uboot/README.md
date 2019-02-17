@@ -79,11 +79,13 @@ saveenv
 run nc
 ```
 
-Define linux kernel boot arguments, including kernel netconsole ports:
+Define linux kernel boot arguments, including kernel netconsole ports. Remove ipv6.disable=1 if you want ipv6. There is also a "debugargs" if you want to enable more kernel debug info.
 
 ```
-setenv bootargs_lan 'setenv bootargs netconsole=6663@${ipaddr}/,6664@${ncIPLan}/${ncMacLan} root=/dev/sda2 earlyprintk rw rootfstype=ext4 rootflags=data=ordered'
-setenv bootargs_wlan 'setenv bootargs netconsole=6663@${ipaddr}/,6664@${ncIPWLan}/${ncMacLan} root=/dev/sda2 earlyprintk rw rootfstype=ext4 rootflags=data=ordered'
+setenv bootargs 'root=/dev/sda2 earlycon earlyprintk rw rootfstype=ext4 rootflags=data=ordered ipv6.disable=1'
+setenv debugargs 'setenv bootargs debug rootdelay=5 panic=10 debug ignore_loglevel log_buf_len=1M ${bootargs}'
+setenv bootargs_lan 'setenv bootargs netconsole=6663@${ipaddr}/,6664@${ncIPLan}/${ncMacLan} ${bootargs}'
+setenv bootargs_wlan 'setenv bootargs netconsole=6663@${ipaddr}/,6664@${ncIPWLan}/${ncMacWLan} ${bootargs}'
 setenv load_sata1 'sata init; ext2load sata 1:1 ${kernel_addr_r} /boot/uImage; ext2load sata 1:1 ${fdt_addr_r} /boot/apollo3g.dtb'
 setenv load_sata2 'sata init; ext2load sata 1:1 ${kernel_addr_r} /boot/uImage.safe; ext2load sata 1:1 ${fdt_addr_r} /boot/apollo3g.safe.dtb'
 setenv boot_sata 'run bootargs_lan addtty; bootm ${kernel_addr_r} - ${fdt_addr_r}'
