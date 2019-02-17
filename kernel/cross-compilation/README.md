@@ -8,10 +8,10 @@ You can download the Image Builder for the APM821xx [here](https://downloads.ope
 
 ## Cross-compiling the kernel
 
-To simply compile the kernel, leverage the xkmake script.
+To simply compile the kernel, leverage the `xkmake` script.
 You need to customize the location of the toolchain.
 
-For a full script that compiles the kernel, modules and transfers everything back to My Book Live, leverage xkbuild.
+For a full script that compiles the kernel, modules and transfers everything back to My Book Live, leverage `xkbuild`.
 You need to customize the location of the toolchain and the name of your NAS.
 Additionally you need to enable ssh and sftp to automatically log in your NAS as root.
 
