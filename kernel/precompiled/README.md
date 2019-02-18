@@ -15,7 +15,7 @@ All kernels listed below here have survived a 96-hours torture test.  Other kern
 All posted kernels are compressed tar archives with [7zip](https://www.7-zip.org/) and contain:
 * /boot/apollo3g.dtb:  compiled device tree compatible with kernel
 * /boot/uImage_4.9.xx: compiled/compressed kernel
-* /lib/modules/4.9.xx: compile kernel modules
+* /lib/modules/4.9.xx: compiled kernel modules
 
 _First make sure you have a backup of your current `/boot/apollo3g.dtb' and kernel `/boot/uImage`_.<br>
 Copy the uncompressed tar file to `/tmp` of My Book Live, extract the archive, enable the new kernel and reboot:<br>
