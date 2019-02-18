@@ -1,6 +1,6 @@
 diff -Naur a/drivers/net/ethernet/ibm/emac/Kconfig b/drivers/net/ethernet/ibm/emac/Kconfig
---- a/drivers/net/ethernet/ibm/emac/Kconfig	2017-10-05 07:44:17.000000000 +0000
-+++ b/drivers/net/ethernet/ibm/emac/Kconfig	2017-07-02 08:08:15.018613709 +0000
+--- a/drivers/net/ethernet/ibm/emac/Kconfig	2019-01-09 16:16:45.000000000 +0100 +0000
++++ b/drivers/net/ethernet/ibm/emac/Kconfig	2019-02-16 18:28:31.991150000 +0000
 @@ -39,6 +39,51 @@
  
  	  If unsure, set to 0.
@@ -54,8 +54,8 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/Kconfig b/drivers/net/ethernet/ibm/em
  	bool "Debugging"
  	depends on IBM_EMAC
 diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/emac/core.c
---- a/drivers/net/ethernet/ibm/emac/core.c	2018-06-24 17:46:37.143077045 +0000
-+++ b/drivers/net/ethernet/ibm/emac/core.c	2018-06-24 19:10:04.564026077 +0000
+--- a/drivers/net/ethernet/ibm/emac/core.c	2019-01-09 16:16:45.000000000 +0000
++++ b/drivers/net/ethernet/ibm/emac/core.c	2019-02-16 18:28:31.991150000 +0000
 @@ -33,6 +33,7 @@
  #include <linux/pci.h>
  #include <linux/etherdevice.h>
@@ -64,15 +64,23 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  #include <linux/crc32.h>
  #include <linux/ethtool.h>
  #include <linux/mii.h>
-@@ -45,6 +46,7 @@
- #include <linux/of_mdio.h>
+@@ -42,12 +43,14 @@
+ #include <linux/of_address.h>
+ #include <linux/of_irq.h>
+ #include <linux/of_net.h>
++#include <linux/of_mdio.h>
  #include <linux/slab.h>
  
 +#include <net/tcp.h>
  #include <asm/processor.h>
  #include <asm/io.h>
  #include <asm/dma.h>
-@@ -76,8 +78,7 @@
+-#include <asm/uaccess.h>
++#include <linux/uaccess.h>
+ #include <asm/dcr.h>
+ #include <asm/dcr-regs.h>
+ 
+@@ -75,8 +78,7 @@
  #define DRV_DESC        "PPC 4xx OCP EMAC driver"
  
  MODULE_DESCRIPTION(DRV_DESC);
@@ -82,7 +90,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  MODULE_LICENSE("GPL");
  
  /* minimum number of free TX descriptors required to wake up TX process */
-@@ -123,48 +124,34 @@
+@@ -122,39 +124,34 @@
  #define EMAC_PROBE_DEP_TIMEOUT	(HZ * 5)
  
  /* I don't want to litter system log with timeout errors
@@ -93,7 +101,6 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 -{
 -	if (emac_has_feature(dev, EMAC_FTR_440GX_PHY_CLK_FIX |
 -				  EMAC_FTR_460EX_PHY_CLK_FIX |
--				  EMAC_FTR_APM821XX_PHY_CLK_FIX |
 -				  EMAC_FTR_440EP_PHY_CLK_FIX))
 + * when we have brain-damaged PHY */
 +static inline void emac_report_timeout_error(struct emac_instance *dev, const char *error) {
@@ -117,10 +124,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 -	if (emac_has_feature(dev, EMAC_FTR_440EP_PHY_CLK_FIX))
 -		dcri_clrset(SDR0, SDR0_MFR,
 -			    0, SDR0_MFR_ECS >> dev->cell_index);
--
- 	if (emac_has_feature(dev, EMAC_FTR_APM821XX_PHY_CLK_FIX))
--                dcri_clrset(SDR0, SDR0_ETH_CFG,
--                        0, 0x00000100 >> dev->cell_index);
++	if (emac_has_feature(dev, EMAC_FTR_APM821XX_PHY_CLK_FIX))
 +		dcri_clrset(SDR0, SDR0_ETH_CFG, 0, 0x00000100 >> dev->cell_index);
 +	else if (emac_has_feature(dev, EMAC_FTR_440EP_PHY_CLK_FIX))
 +		dcri_clrset(SDR0, SDR0_MFR, 0, SDR0_MFR_ECS >> dev->cell_index);
@@ -134,17 +138,14 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 -	if (emac_has_feature(dev, EMAC_FTR_440EP_PHY_CLK_FIX))
 -		dcri_clrset(SDR0, SDR0_MFR,
 -			    SDR0_MFR_ECS >> dev->cell_index, 0);
--
- 	if (emac_has_feature(dev, EMAC_FTR_APM821XX_PHY_CLK_FIX))
--		dcri_clrset(SDR0, SDR0_ETH_CFG,
--			    0x00000100 >> dev->cell_index, 0);
++	if (emac_has_feature(dev, EMAC_FTR_APM821XX_PHY_CLK_FIX))
 +		dcri_clrset(SDR0, SDR0_ETH_CFG, 0x00000100 >> dev->cell_index, 0);
 +	else if (emac_has_feature(dev, EMAC_FTR_440EP_PHY_CLK_FIX))
 +		dcri_clrset(SDR0, SDR0_MFR, SDR0_MFR_ECS >> dev->cell_index, 0);
  #endif
  }
  
-@@ -173,16 +160,13 @@
+@@ -163,16 +160,13 @@
  #define PHY_POLL_LINK_OFF	(HZ / 5)
  
  /* Graceful stop timeouts in us.
@@ -163,7 +164,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  
  /* Please, keep in sync with struct ibm_emac_stats/ibm_emac_error_stats */
  static const char emac_stats_keys[EMAC_ETHTOOL_STATS_COUNT][ETH_GSTRING_LEN] = {
-@@ -204,39 +188,27 @@
+@@ -194,39 +188,27 @@
  };
  
  static irqreturn_t emac_irq(int irq, void *dev_instance);
@@ -215,7 +216,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	struct emac_regs __iomem *p = dev->emacp;
  	u32 r;
  
-@@ -255,57 +227,79 @@
+@@ -245,57 +227,80 @@
  	}
  }
  
@@ -223,6 +224,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 -{
 -	struct emac_regs __iomem *p = dev->emacp;
 +#ifdef CONFIG_IBM_EMAC_MASK_CEXT
++/* no longer used
 +static void emac_spin_delay(unsigned long spin_usecs) {
 +	u64 tick_start, tick_end, spin_ticks = spin_usecs*tb_ticks_per_usec;
 +	//printk("spin_ticks = %lld\n", spin_ticks);
@@ -232,7 +234,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 +		if((tick_end - tick_start) >= spin_ticks) return;
 +	}
 +}
-+
++*/
 +/* some code duplication here to avoid function calls */
 +static inline void emac_start_idlemode(struct emac_instance *dev) {
 +	u32 perclk;
@@ -327,7 +329,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	netif_tx_lock_bh(dev->ndev);
  	netif_addr_lock(dev->ndev);
  	dev->no_mcast = 1;
-@@ -316,8 +310,7 @@
+@@ -306,8 +311,7 @@
  	netif_tx_disable(dev->ndev);
  }
  
@@ -337,7 +339,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	netif_tx_lock_bh(dev->ndev);
  	netif_addr_lock(dev->ndev);
  	dev->no_mcast = 0;
-@@ -336,20 +329,15 @@
+@@ -326,20 +330,15 @@
  	mal_poll_enable(dev->mal, &dev->commac);
  }
  
@@ -363,7 +365,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	struct emac_regs __iomem *p = dev->emacp;
  	int n = 20;
  	bool __maybe_unused try_internal_clock = false;
-@@ -357,9 +345,14 @@
+@@ -347,9 +346,14 @@
  	DBG(dev, "reset" NL);
  
  	if (!dev->reset_failed) {
@@ -381,7 +383,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  		emac_rx_disable(dev);
  		emac_tx_disable(dev);
  	}
-@@ -384,22 +377,18 @@
+@@ -374,22 +378,18 @@
  	 * the first reset fails.
  	 */
  	if (emac_has_feature(dev, EMAC_FTR_460EX_PHY_CLK_FIX)) {
@@ -410,7 +412,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  
  #ifdef CONFIG_PPC_DCR_NATIVE
  	if (emac_has_feature(dev, EMAC_FTR_460EX_PHY_CLK_FIX)) {
-@@ -410,11 +399,9 @@
+@@ -400,11 +400,9 @@
  			goto do_retry;
  		}
  
@@ -424,7 +426,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  		}
  	}
  #endif
-@@ -429,158 +416,108 @@
+@@ -419,158 +417,108 @@
  	}
  }
  
@@ -434,7 +436,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	const int regs = EMAC_XAHT_REGS(dev);
 -	u32 *gaht_base = emac_gaht_base(dev);
 -	u32 gaht_temp[regs];
-+	u32 *gaht_base = emac_gaht_base(dev), gaht_temp[regs];
++	u32 *gaht_base = emac_gaht_base(dev), gaht_temp[EMAC_XAHT_MAX_REGS];
  	struct netdev_hw_addr *ha;
  	int i;
  
@@ -630,7 +632,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	struct emac_regs __iomem *p = dev->emacp;
  	struct net_device *ndev = dev->ndev;
  	int tx_size, rx_size, link = netif_carrier_ok(dev->ndev);
-@@ -589,14 +526,11 @@
+@@ -579,14 +527,11 @@
  	DBG(dev, "configure" NL);
  
  	if (!link) {
@@ -648,7 +650,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  
  	DBG(dev, " link = %d duplex = %d, pause = %d, asym_pause = %d\n",
  	    link, dev->phy.duplex, dev->phy.pause, dev->phy.asym_pause);
-@@ -606,12 +540,15 @@
+@@ -596,12 +541,15 @@
  	rx_size = dev->rx_fifo_size;
  
  	/* No link, force loopback */
@@ -666,7 +668,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  
  	/* Adjust fifo sizes, mr1 and timeouts based on link speed */
  	dev->stop_timeout = STOP_TIMEOUT_10;
-@@ -634,37 +571,29 @@
+@@ -624,37 +572,29 @@
  		rx_size = dev->rx_fifo_size_gige;
  
  		if (dev->ndev->mtu > ETH_DATA_LEN) {
@@ -712,7 +714,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	}
  
  	/* Add base settings & fifo sizes & program MR1 */
-@@ -673,25 +602,22 @@
+@@ -663,25 +603,22 @@
  
  	/* Set individual MAC address */
  	out_be32(&p->iahr, (ndev->dev_addr[0] << 8) | ndev->dev_addr[1]);
@@ -742,7 +744,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  			      tx_size / 2 / dev->fifo_entry_size);
  	out_be32(&p->tmr1, r);
  	out_be32(&p->trtr, emac_calc_trtr(dev, tx_size / 2));
-@@ -713,8 +639,7 @@
+@@ -703,8 +640,7 @@
  	   3187 bytes
  
  	   I chose to set high-water mark to RX_FIFO_SIZE / 4 (1024 bytes)
@@ -752,7 +754,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	r = emac_calc_rwmr(dev, rx_size / 8 / dev->fifo_entry_size,
  			   rx_size / 4 / dev->fifo_entry_size);
  	out_be32(&p->rwmr, r);
-@@ -727,23 +652,18 @@
+@@ -717,23 +653,18 @@
  		EMAC_ISR_ALE | EMAC_ISR_BFCS | EMAC_ISR_PTLE | EMAC_ISR_ORE |
  		EMAC_ISR_IRE | EMAC_ISR_TE;
  	if (emac_has_feature(dev, EMAC_FTR_EMAC4))
@@ -780,7 +782,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	DBG(dev, "reinitialize" NL);
  
  	emac_netif_stop(dev);
-@@ -754,8 +674,7 @@
+@@ -744,8 +675,7 @@
  	emac_netif_start(dev);
  }
  
@@ -790,7 +792,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	DBG(dev, "full_tx_reset" NL);
  
  	emac_tx_disable(dev);
-@@ -770,12 +689,10 @@
+@@ -760,12 +690,10 @@
  	emac_rx_enable(dev);
  }
  
@@ -804,7 +806,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	mutex_lock(&dev->link_lock);
  	if (dev->opened) {
  		emac_netif_stop(dev);
-@@ -785,41 +702,29 @@
+@@ -775,41 +703,29 @@
  	mutex_unlock(&dev->link_lock);
  }
  
@@ -852,7 +854,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  
  	/* Wait for management interface to become idle */
  	n = 20;
-@@ -832,18 +737,13 @@
+@@ -822,18 +738,13 @@
  	}
  
  	/* Issue read command */
@@ -878,7 +880,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	out_be32(&p->stacr, r);
  
  	/* Wait for read to complete */
-@@ -867,31 +767,19 @@
+@@ -857,31 +768,19 @@
  	DBG2(dev, "mdio_read -> %04x" NL, r);
  	err = 0;
   bail:
@@ -914,7 +916,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  
  	/* Wait for management interface to be idle */
  	n = 20;
-@@ -904,19 +792,13 @@
+@@ -894,19 +793,13 @@
  	}
  
  	/* Issue write command */
@@ -941,7 +943,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	out_be32(&p->stacr, r);
  
  	/* Wait for write to complete */
-@@ -930,38 +812,24 @@
+@@ -920,38 +813,24 @@
  	}
  	err = 0;
   bail:
@@ -988,7 +990,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	struct emac_regs __iomem *p = dev->emacp;
  	u32 rmr = emac_iff2rmr(dev->ndev);
  
-@@ -986,64 +854,50 @@
+@@ -976,64 +855,50 @@
  	 */
  	dev->mcast_pending = 0;
  	emac_rx_disable(dev);
@@ -1060,7 +1062,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  
  	mutex_lock(&dev->link_lock);
  	emac_netif_stop(dev);
-@@ -1058,24 +912,22 @@
+@@ -1048,20 +913,18 @@
  
  	/* Make a first pass over RX ring and mark BDs ready, dropping
  	 * non-processed packets on the way. We need this as a separate pass
@@ -1076,7 +1078,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 -		dev->rx_desc[i].ctrl = MAL_RX_CTRL_EMPTY |
 -		    (i == (NUM_RX_BUFF - 1) ? MAL_RX_CTRL_WRAP : 0);
 +		dev->rx_desc[i].ctrl = MAL_RX_CTRL_EMPTY | MAL_RX_CTRL_INTR |
-+			(i == (NUM_RX_BUFF - 1) ? MAL_RX_CTRL_WRAP : 0);
++			(i == (NUM_RX_BUFF - 1) ? MAL_RX_CTRL_WRAP : 0);  //ECO
  	}
  
  	/* Reallocate RX ring only if bigger skb buffers are required */
@@ -1088,12 +1090,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  
  	/* Second pass, allocate new skbs */
  	for (i = 0; i < NUM_RX_BUFF; ++i) {
--		struct sk_buff *skb = alloc_skb(rx_skb_size, GFP_ATOMIC);
-+		struct sk_buff *skb = alloc_skb(rx_skb_size, GFP_ATOMIC);	
- 		if (!skb) {
- 			ret = -ENOMEM;
- 			goto oom;
-@@ -1086,18 +938,15 @@
+@@ -1076,18 +939,15 @@
  
  		skb_reserve(skb, EMAC_RX_SKB_HEADROOM + 2);
  		dev->rx_desc[i].data_ptr =
@@ -1115,7 +1112,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	}
  
  	if (mr1_jumbo_bit_change) {
-@@ -1122,53 +971,65 @@
+@@ -1112,53 +972,65 @@
  }
  
  /* Process ctx, rtnl_lock semaphore */
@@ -1191,7 +1188,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 -static void emac_clean_rx_ring(struct emac_instance *dev)
 -{
 -	int i;
-+static __always_inline void  emac_clean_rx_ring(struct emac_instance *dev) {
++static __always_inline void emac_clean_rx_ring(struct emac_instance *dev) {
 +	register int i;
  
  	for (i = 0; i < NUM_RX_BUFF; ++i)
@@ -1200,7 +1197,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  			dev->rx_desc[i].ctrl = 0;
  			dev_kfree_skb(dev->rx_skb[i]);
  			dev->rx_skb[i] = NULL;
-@@ -1181,60 +1042,56 @@
+@@ -1171,60 +1043,56 @@
  	}
  }
  
@@ -1223,8 +1220,9 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 +	    dma_map_single(&dev->ofdev->dev, skb->data - 2, dev->rx_sync_size, DMA_FROM_DEVICE) + 2;
  	wmb();
 -	dev->rx_desc[slot].ctrl = MAL_RX_CTRL_EMPTY |
+-	    (slot == (NUM_RX_BUFF - 1) ? MAL_RX_CTRL_WRAP : 0);
 +	dev->rx_desc[slot].ctrl = MAL_RX_CTRL_EMPTY | MAL_RX_CTRL_INTR |
- 	    (slot == (NUM_RX_BUFF - 1) ? MAL_RX_CTRL_WRAP : 0);
++	    (slot == (NUM_RX_BUFF - 1) ? MAL_RX_CTRL_WRAP : 0);  //ECO
  
  	return 0;
  }
@@ -1284,7 +1282,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  			goto oom;
  		}
  
-@@ -1245,8 +1102,7 @@
+@@ -1235,8 +1103,7 @@
  	mutex_lock(&dev->link_lock);
  	dev->opened = 1;
  
@@ -1294,7 +1292,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	if (dev->phy.address >= 0) {
  		int link_poll_interval;
  		if (dev->phy.def->ops->poll_link(&dev->phy)) {
-@@ -1269,6 +1125,7 @@
+@@ -1259,6 +1126,7 @@
  	/* Required for Pause packet support in EMAC */
  	dev_mc_add_global(ndev, default_mcast_addr);
  
@@ -1302,7 +1300,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	emac_configure(dev);
  	mal_poll_add(dev->mal, &dev->commac);
  	mal_enable_tx_channel(dev->mal, dev->mal_tx_chan);
-@@ -1276,6 +1133,8 @@
+@@ -1266,6 +1134,8 @@
  	mal_enable_rx_channel(dev->mal, dev->mal_rx_chan);
  	emac_tx_enable(dev);
  	emac_rx_enable(dev);
@@ -1311,7 +1309,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	emac_netif_start(dev);
  
  	mutex_unlock(&dev->link_lock);
-@@ -1284,55 +1143,42 @@
+@@ -1274,55 +1144,42 @@
   oom:
  	emac_clean_rx_ring(dev);
  	free_irq(dev->emac_irq, dev);
@@ -1336,9 +1334,9 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 -		speed = SPEED_100;
 -	else
 -		speed = SPEED_10;
-+	if (r & EMAC_MR1_MF_1000) 		speed = SPEED_1000;
-+	else if (r & EMAC_MR1_MF_100)	speed = SPEED_100;
-+	else							speed = SPEED_10;
++	if (r & EMAC_MR1_MF_1000) speed = SPEED_1000;
++	else if (r & EMAC_MR1_MF_100) speed = SPEED_100;
++	else speed = SPEED_10;
  
  	switch (r & (EMAC_MR1_EIFC | EMAC_MR1_APP)) {
 -	case (EMAC_MR1_EIFC | EMAC_MR1_APP):
@@ -1352,8 +1350,8 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 -	default:
 -		pause = asym_pause = 0;
 +	case (EMAC_MR1_EIFC | EMAC_MR1_APP):	pause = 1; asym_pause = 0; break;
-+	case EMAC_MR1_APP:						pause = 0; asym_pause = 1; break;
-+	default:								pause = asym_pause = 0;
++	case EMAC_MR1_APP:			pause = 0; asym_pause = 1; break;
++	default:				pause = asym_pause = 0;
  	}
  	return speed != dev->phy.speed || duplex != dev->phy.duplex ||
  	    pause != dev->phy.pause || asym_pause != dev->phy.asym_pause;
@@ -1378,7 +1376,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  
  	if (dev->phy.def->ops->poll_link(&dev->phy)) {
  		if (!netif_carrier_ok(dev->ndev)) {
-@@ -1362,8 +1208,7 @@
+@@ -1352,8 +1209,7 @@
  	mutex_unlock(&dev->link_lock);
  }
  
@@ -1388,7 +1386,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	netif_carrier_off(dev->ndev);
  	smp_rmb();
  	if (dev->link_polling) {
-@@ -1373,9 +1218,8 @@
+@@ -1363,9 +1219,8 @@
  	}
  }
  
@@ -1400,7 +1398,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	struct emac_instance *dev = netdev_priv(ndev);
  
  	DBG(dev, "close" NL);
-@@ -1401,35 +1245,54 @@
+@@ -1391,35 +1246,54 @@
  	free_irq(dev->emac_irq, dev);
  
  	netif_carrier_off(ndev);
@@ -1426,7 +1424,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 +			//return EMAC_TX_CTRL_TAH_SSR(0);
 +			register u32 seg_size, i;
 +			//struct tah_instance *tah_dev;
-+			static int first = 0;
++			//static int first = 0;
 +
 +			//if (likely(skb->protocol == cpu_to_be16(ETH_P_IP)))	is_tcp = (ip_hdr(skb)->protocol == IPPROTO_TCP);
 +			//else if (skb->protocol == cpu_to_be16(ETH_P_IPV6))	is_tcp = (ipv6_hdr(skb)->nexthdr == IPPROTO_TCP);
@@ -1471,7 +1469,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	if (unlikely(++dev->tx_cnt == NUM_TX_BUFF)) {
  		netif_stop_queue(ndev);
  		DBG2(dev, "stopped TX queue" NL);
-@@ -1443,48 +1306,45 @@
+@@ -1433,48 +1307,45 @@
  }
  
  /* Tx lock BH */
@@ -1537,7 +1535,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  
  		dev->tx_skb[slot] = NULL;
  		dev->tx_desc[slot].data_ptr = pd;
-@@ -1492,39 +1352,40 @@
+@@ -1482,39 +1353,40 @@
  		dev->tx_desc[slot].ctrl = ctrl;
  		++dev->tx_cnt;
  
@@ -1593,7 +1591,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	slot = dev->tx_slot;
  
  	/* skb data */
-@@ -1535,21 +1396,14 @@
+@@ -1525,21 +1397,14 @@
  	dev->tx_desc[slot].data_len = (u16) chunk;
  	len -= chunk;
  	if (unlikely(len))
@@ -1619,7 +1617,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	}
  
  	DBG2(dev, "xmit_sg(%u) %d - %d" NL, skb->len, dev->tx_slot, slot);
-@@ -1558,23 +1412,19 @@
+@@ -1548,23 +1413,19 @@
  	dev->tx_skb[slot] = skb;
  
  	/* Send the packet out */
@@ -1648,7 +1646,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	}
  	++dev->estats.tx_undo;
  
-@@ -1585,126 +1435,120 @@
+@@ -1575,126 +1436,120 @@
  }
  
  /* Tx lock BHs */
@@ -1781,7 +1779,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 -				       int len)
 -{
 -	struct sk_buff *skb = dev->rx_skb[slot];
-+static __always_inline void emac_recycle_rx_skb(struct emac_instance *dev, int slot, int len, unsigned char* data) {
++static __always_inline void emac_recycle_rx_skb(struct emac_instance *dev, int slot, int len, unsigned char* skbdata) {
 +	//struct sk_buff *skb = dev->rx_skb[slot];
  
  	DBG2(dev, "recycle %d %d" NL, slot, len);
@@ -1790,7 +1788,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 -		dma_map_single(&dev->ofdev->dev, skb->data - 2,
 -			       EMAC_DMA_ALIGN(len + 2), DMA_FROM_DEVICE);
 -
-+		dma_map_single(&dev->ofdev->dev, data - 2, EMAC_DMA_ALIGN(len + 2), DMA_FROM_DEVICE);
++		dma_map_single(&dev->ofdev->dev, skbdata - 2, EMAC_DMA_ALIGN(len + 2), DMA_FROM_DEVICE);
  	dev->rx_desc[slot].data_len = 0;
  	wmb();
 -	dev->rx_desc[slot].ctrl = MAL_RX_CTRL_EMPTY |
@@ -1844,13 +1842,13 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  #ifdef CONFIG_IBM_EMAC_TAH
  	if (!ctrl && dev->tah_dev) {
  		skb->ip_summed = CHECKSUM_UNNECESSARY;
-@@ -1713,92 +1557,95 @@
+@@ -1703,92 +1558,94 @@
  #endif
  }
  
 -static inline int emac_rx_sg_append(struct emac_instance *dev, int slot)
 -{
-+/* local version of skb_put for performance reasons */
++/* ECO: local version of skb_put for performance reasons */
 +static __always_inline unsigned char *skb_putl(struct sk_buff *skb, unsigned int len) {
 +	unsigned char *tmp = skb_tail_pointer(skb);
 +	SKB_LINEAR_ASSERT(skb);
@@ -1883,7 +1881,6 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  		}
  	}
 -	emac_recycle_rx_skb(dev, slot, 0);
-+//out:
 +	emac_recycle_rx_skb(dev, slot, 0, dev->rx_skb[slot]->data);
  	return -1;
  }
@@ -1955,7 +1952,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 +		} else if (unlikely(emac_alloc_rx_skb(dev, slot, GFP_ATOMIC))) goto oom;
  
 -		skb_put(skb, len);
-+		skb_putl(skb, len);
++		skb_putl(skb, len); //ECO: local version of skb_put
  	push_packet:
 +		//skb->dev = dev->ndev;		//ECO
  		skb->protocol = eth_type_trans(skb, dev->ndev);
@@ -1973,7 +1970,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  		--budget;
  		++received;
  		continue;
-@@ -1808,32 +1655,28 @@
+@@ -1798,32 +1655,28 @@
  			if (unlikely(emac_alloc_rx_skb(dev, slot, GFP_ATOMIC))) {
  				DBG(dev, "rx OOM %d" NL, slot);
  				++dev->estats.rx_dropped_oom;
@@ -2011,7 +2008,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  		goto next;
  	}
  
-@@ -1866,46 +1709,33 @@
+@@ -1856,46 +1709,33 @@
  }
  
  /* NAPI poll context */
@@ -2068,7 +2065,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	struct emac_instance *dev = dev_instance;
  	struct emac_regs __iomem *p = dev->emacp;
  	struct emac_error_stats *st = &dev->estats;
-@@ -1917,45 +1747,32 @@
+@@ -1907,45 +1747,32 @@
  	out_be32(&p->isr, isr);
  
  	DBG(dev, "isr = %08x" NL, isr);
@@ -2134,7 +2131,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	struct emac_instance *dev = netdev_priv(ndev);
  	struct emac_stats *st = &dev->stats;
  	struct emac_error_stats *est = &dev->estats;
-@@ -1970,39 +1787,25 @@
+@@ -1960,39 +1787,24 @@
  	nst->rx_bytes = (unsigned long)st->rx_bytes;
  	nst->tx_packets = (unsigned long)st->tx_packets;
  	nst->tx_bytes = (unsigned long)st->tx_bytes;
@@ -2147,7 +2144,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	nst->tx_dropped = (unsigned long)est->tx_dropped;
  
  	nst->rx_errors = (unsigned long)est->rx_bd_errors;
- 	nst->rx_fifo_errors = (unsigned long)(est->rx_bd_overrun +
+-	nst->rx_fifo_errors = (unsigned long)(est->rx_bd_overrun +
 -					      est->rx_fifo_overrun +
 -					      est->rx_overrun);
 -	nst->rx_frame_errors = (unsigned long)(est->rx_bd_alignment_error +
@@ -2164,12 +2161,12 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 -						est->rx_packet_too_long +
 -						est->rx_out_of_range +
 -						est->rx_in_range);
-+		est->rx_fifo_overrun + est->rx_overrun);
++	nst->rx_fifo_errors = (unsigned long)(est->rx_bd_overrun + est->rx_fifo_overrun + est->rx_overrun);
 +	nst->rx_frame_errors = (unsigned long)(est->rx_bd_alignment_error + est->rx_alignment_error);
 +	nst->rx_crc_errors = (unsigned long)(est->rx_bd_bad_fcs + est->rx_bad_fcs);
 +	nst->rx_length_errors = (unsigned long)(est->rx_bd_runt_packet + est->rx_bd_short_event +
 +		est->rx_bd_packet_too_long + est->rx_bd_out_of_range + est->rx_bd_in_range +
-+		est->rx_runt_packet + est->rx_short_event +	est->rx_packet_too_long +
++		est->rx_runt_packet + est->rx_short_event + est->rx_packet_too_long +
 +		est->rx_out_of_range + est->rx_in_range);
  
  	nst->tx_errors = (unsigned long)(est->tx_bd_errors + est->tx_errors);
@@ -2185,7 +2182,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	spin_unlock_irqrestore(&dev->lock, flags);
  	return nst;
  }
-@@ -2022,16 +1825,13 @@
+@@ -2012,16 +1824,13 @@
  };
  
  /* Ethtool support */
@@ -2204,7 +2201,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  
  	mutex_lock(&dev->link_lock);
  	cmd->advertising = dev->phy.advertising;
-@@ -2043,9 +1843,7 @@
+@@ -2033,9 +1842,7 @@
  	return 0;
  }
  
@@ -2215,7 +2212,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	struct emac_instance *dev = netdev_priv(ndev);
  	u32 f = dev->phy.features;
  
-@@ -2053,60 +1851,37 @@
+@@ -2043,60 +1850,37 @@
  	    cmd->autoneg, cmd->speed, cmd->duplex, cmd->advertising);
  
  	/* Basic sanity checks */
@@ -2293,7 +2290,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  		mutex_unlock(&dev->link_lock);
  	}
  	emac_force_link_update(dev);
-@@ -2114,16 +1889,12 @@
+@@ -2104,16 +1888,12 @@
  	return 0;
  }
  
@@ -2312,7 +2309,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	struct emac_instance *dev = netdev_priv(ndev);
  
  	mutex_lock(&dev->link_lock);
-@@ -2132,56 +1903,41 @@
+@@ -2122,56 +1902,41 @@
  		pp->autoneg = 1;
  
  	if (dev->phy.duplex == DUPLEX_FULL) {
@@ -2383,7 +2380,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	struct emac_instance *dev = netdev_priv(ndev);
  	struct emac_ethtool_regs_hdr *hdr = buf;
  
-@@ -2204,15 +1960,12 @@
+@@ -2194,15 +1959,12 @@
  	}
  }
  
@@ -2401,7 +2398,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  
  	mutex_lock(&dev->link_lock);
  	if (!dev->phy.autoneg) {
-@@ -2227,25 +1980,17 @@
+@@ -2217,25 +1979,17 @@
  	return res;
  }
  
@@ -2433,7 +2430,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	struct emac_instance *dev = netdev_priv(ndev);
  
  	memcpy(tmp_stats, &dev->stats, sizeof(dev->stats));
-@@ -2253,9 +1998,7 @@
+@@ -2243,9 +1997,7 @@
  	memcpy(tmp_stats, &dev->estats, sizeof(dev->estats));
  }
  
@@ -2444,7 +2441,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	struct emac_instance *dev = netdev_priv(ndev);
  
  	strlcpy(info->driver, "ibm_emac", sizeof(info->driver));
-@@ -2264,6 +2007,34 @@
+@@ -2254,6 +2006,34 @@
  		 dev->cell_index, dev->ofdev->dev.of_node->full_name);
  }
  
@@ -2479,7 +2476,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  static const struct ethtool_ops emac_ethtool_ops = {
  	.get_settings = emac_ethtool_get_settings,
  	.set_settings = emac_ethtool_set_settings,
-@@ -2282,33 +2053,323 @@
+@@ -2272,33 +2052,323 @@
  	.get_ethtool_stats = emac_ethtool_get_ethtool_stats,
  
  	.get_link = ethtool_op_get_link,
@@ -2777,14 +2774,14 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 +	&dev_attr_emi_fix_enable.attr,
 +#endif
 +	NULL
-+};
-+
-+static const struct attribute_group ibm_newemac_attr_group = {
-+	.attrs = ibm_newemac_attr,
  };
  
 -static int emac_ioctl(struct net_device *ndev, struct ifreq *rq, int cmd)
 -{
++static const struct attribute_group ibm_newemac_attr_group = {
++	.attrs = ibm_newemac_attr,
++};
++
 +#endif
 +
 +/* IOCTL support for the interface */
@@ -2820,7 +2817,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	}
  }
  
-@@ -2327,9 +2388,7 @@
+@@ -2317,9 +2387,7 @@
  #define	EMAC_DEP_PREV_IDX	5
  #define	EMAC_DEP_COUNT		6
  
@@ -2831,7 +2828,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	int i, there = 0;
  	struct device_node *np;
  
-@@ -2347,27 +2406,19 @@
+@@ -2337,27 +2405,19 @@
  				there++;
  				continue;
  			}
@@ -2868,7 +2865,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	of_dev_put(dev->mal_dev);
  	of_dev_put(dev->zmii_dev);
  	of_dev_put(dev->rgmii_dev);
-@@ -2375,12 +2426,9 @@
+@@ -2365,12 +2425,9 @@
  	of_dev_put(dev->tah_dev);
  }
  
@@ -2883,7 +2880,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	return 0;
  }
  
-@@ -2388,8 +2436,7 @@
+@@ -2378,8 +2435,7 @@
  	.notifier_call = emac_of_bus_notify
  };
  
@@ -2893,7 +2890,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	struct emac_depentry deps[EMAC_DEP_COUNT];
  	int i, err;
  
-@@ -2398,22 +2445,16 @@
+@@ -2388,22 +2444,16 @@
  	deps[EMAC_DEP_MAL_IDX].phandle = dev->mal_ph;
  	deps[EMAC_DEP_ZMII_IDX].phandle = dev->zmii_ph;
  	deps[EMAC_DEP_RGMII_IDX].phandle = dev->rgmii_ph;
@@ -2921,7 +2918,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	}
  	if (err == 0) {
  		dev->mal_dev = deps[EMAC_DEP_MAL_IDX].ofdev;
-@@ -2426,23 +2467,18 @@
+@@ -2416,23 +2466,246 @@
  	return err;
  }
  
@@ -2942,196 +2939,241 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	return 0;
  }
  
--static void emac_adjust_link(struct net_device *ndev)
--{
-+static void emac_adjust_link(struct net_device *ndev) {
- 	struct emac_instance *dev = netdev_priv(ndev);
- 	struct phy_device *phy = dev->phy_dev;
- 
-@@ -2454,33 +2490,26 @@
- 	dev->phy.advertising = phy->advertising;
- }
- 
--static int emac_mii_bus_read(struct mii_bus *bus, int addr, int regnum)
--{
-+static int emac_mii_bus_read(struct mii_bus *bus, int addr, int regnum) {
- 	return emac_mdio_read(bus->priv, addr, regnum);
- }
- 
--static int emac_mii_bus_write(struct mii_bus *bus, int addr, int regnum, u16 val)
--{
-+static int emac_mii_bus_write(struct mii_bus *bus, int addr, int regnum, u16 val) {
- 	emac_mdio_write(bus->priv, addr, regnum, val);
- 	return 0;
- }
- 
--static int emac_mii_bus_reset(struct mii_bus *bus)
--{
-+static int emac_mii_bus_reset(struct mii_bus *bus) {
- 	struct emac_instance *dev = netdev_priv(bus->priv);
--	int err;
--
--	err = emac_reset(dev);
--	if (err)
--		return err;
-+	int err = emac_reset(dev);
-+	if (err) return err;
- 	/* Meraki MX60(W)'s uboot will disable the switch and
- 	 * a bus reset won't do anything. */
- 	emac_mii_reset_phy(&dev->phy);
- 	return 0;
- }
- 
--static int emac_mdio_setup_aneg(struct mii_phy *phy, u32 advertise)
--{
-+static int emac_mdio_setup_aneg(struct mii_phy *phy, u32 advertise) {
- 	struct net_device *ndev = phy->dev;
- 	struct emac_instance *dev = netdev_priv(ndev);
- 
-@@ -2495,8 +2524,7 @@
- 	return phy_start_aneg(dev->phy_dev);
- }
- 
--static int emac_mdio_setup_forced(struct mii_phy *phy, int speed, int fd)
--{
-+static int emac_mdio_setup_forced(struct mii_phy *phy, int speed, int fd) {
- 	struct net_device *ndev = phy->dev;
- 	struct emac_instance *dev = netdev_priv(ndev);
- 
-@@ -2509,13 +2537,10 @@
- 	return phy_start_aneg(dev->phy_dev);
- }
- 
--static int emac_mdio_poll_link(struct mii_phy *phy)
--{
-+static int emac_mdio_poll_link(struct mii_phy *phy) {
- 	struct net_device *ndev = phy->dev;
- 	struct emac_instance *dev = netdev_priv(ndev);
--	int res;
--
--	res = phy_read_status(dev->phy_dev);
-+	int res= phy_read_status(dev->phy_dev);
- 	if (res) {
- 		dev_err(&dev->ofdev->dev, "link update failed (%d).", res);
- 		return ethtool_op_get_link(ndev);
-@@ -2524,15 +2549,11 @@
- 	return dev->phy_dev->link;
- }
- 
--static int emac_mdio_read_link(struct mii_phy *phy)
--{
-+static int emac_mdio_read_link(struct mii_phy *phy) {
- 	struct net_device *ndev = phy->dev;
- 	struct emac_instance *dev = netdev_priv(ndev);
--	int res;
--
--	res = phy_read_status(dev->phy_dev);
--	if (res)
--		return res;
-+	int res = phy_read_status(dev->phy_dev);
-+	if (res) return res;
- 
- 	dev->phy.speed = phy->speed;
- 	dev->phy.duplex = phy->duplex;
-@@ -2541,8 +2562,7 @@
- 	return 0;
- }
- 
--static int emac_mdio_init_phy(struct mii_phy *phy)
--{
-+static int emac_mdio_init_phy(struct mii_phy *phy) {
- 	struct net_device *ndev = phy->dev;
- 	struct emac_instance *dev = netdev_priv(ndev);
- 
-@@ -2565,8 +2585,7 @@
- 	.read_link	= emac_mdio_read_link,
- };
- 
--static int emac_dt_mdio_probe(struct emac_instance *dev)
--{
-+static int emac_dt_mdio_probe(struct emac_instance *dev) {
- 	struct device_node *mii_np;
- 	int res;
- 
-@@ -2595,33 +2614,22 @@
- 	dev->mii_bus->reset = &emac_mii_bus_reset;
- 	snprintf(dev->mii_bus->id, MII_BUS_ID_SIZE, "%s", dev->ofdev->name);
- 	res = of_mdiobus_register(dev->mii_bus, mii_np);
--	if (res) {
--		dev_err(&dev->ofdev->dev, "cannot register MDIO bus %s (%d)",
--			dev->mii_bus->name, res);
--	}
-+	if (res) dev_err(&dev->ofdev->dev, "cannot register MDIO bus %s (%d)", dev->mii_bus->name, res);
- 
-  put_node:
- 	of_node_put(mii_np);
- 	return res;
- }
- 
--static int emac_dt_phy_probe(struct emac_instance *dev,
--			     struct device_node *phy_handle)
--{
-+static int emac_dt_phy_probe(struct emac_instance *dev, struct device_node *phy_handle) {
- 	u32 phy_flags = 0;
--	int res;
-+	int res = of_property_read_u32(phy_handle, "phy-flags", &phy_flags);
-+	if (res < 0 && res != -EINVAL) return res;
- 
--	res = of_property_read_u32(phy_handle, "phy-flags", &phy_flags);
--	if (res < 0 && res != -EINVAL)
--		return res;
--
--	dev->phy.def = devm_kzalloc(&dev->ofdev->dev, sizeof(*dev->phy.def),
--				    GFP_KERNEL);
--	if (!dev->phy.def)
--		return -ENOMEM;
-+	dev->phy.def = devm_kzalloc(&dev->ofdev->dev, sizeof(*dev->phy.def), GFP_KERNEL);
-+	if (!dev->phy.def) return -ENOMEM;
- 
--	dev->phy_dev = of_phy_connect(dev->ndev, phy_handle,
--				      &emac_adjust_link, phy_flags,
-+	dev->phy_dev = of_phy_connect(dev->ndev, phy_handle, &emac_adjust_link, phy_flags,
- 				      PHY_INTERFACE_MODE_RGMII);
- 	if (!dev->phy_dev) {
- 		dev_err(&dev->ofdev->dev, "failed to connect to PHY.\n");
-@@ -2638,22 +2646,17 @@
- 	return 0;
- }
- 
--static int emac_probe_dt_phy(struct emac_instance *dev)
--{
-+static int emac_probe_dt_phy(struct emac_instance *dev) {
- 	struct device_node *np = dev->ofdev->dev.of_node;
--	struct device_node *phy_handle;
- 	int res = 0;
- 
--	phy_handle = of_parse_phandle(np, "phy-handle", 0);
--
-+	struct device_node *phy_handle = of_parse_phandle(np, "phy-handle", 0);
- 	if (phy_handle) {
- 		res = emac_dt_mdio_probe(dev);
- 		if (!res) {
- 			res = emac_dt_phy_probe(dev, phy_handle);
--			if (!res)
--				res = 1;
--			else
--				mdiobus_unregister(dev->mii_bus);
-+			if (!res) res = 1;
-+			else mdiobus_unregister(dev->mii_bus);
- 		}
- 	}
- 
-@@ -2664,8 +2667,7 @@
- 	return res;
- }
- 
 -static int emac_init_phy(struct emac_instance *dev)
 -{
++static void emac_adjust_link(struct net_device *ndev) {
++	struct emac_instance *dev = netdev_priv(ndev);
++	struct phy_device *phy = dev->phy_dev;
++
++	dev->phy.autoneg = phy->autoneg;
++	dev->phy.speed = phy->speed;
++	dev->phy.duplex = phy->duplex;
++	dev->phy.pause = phy->pause;
++	dev->phy.asym_pause = phy->asym_pause;
++	dev->phy.advertising = phy->advertising;
++}
++
++static int emac_mii_bus_read(struct mii_bus *bus, int addr, int regnum) {
++	return emac_mdio_read(bus->priv, addr, regnum);
++}
++
++static int emac_mii_bus_write(struct mii_bus *bus, int addr, int regnum, u16 val) {
++	emac_mdio_write(bus->priv, addr, regnum, val);
++	return 0;
++}
++
++static int emac_mii_bus_reset(struct mii_bus *bus) {
++	struct emac_instance *dev = netdev_priv(bus->priv);
++	int err = emac_reset(dev);
++	if (err) return err;
++	/* Meraki MX60(W)'s uboot will disable the switch and
++	 * a bus reset won't do anything. */
++	emac_mii_reset_phy(&dev->phy);
++	return 0;
++}
++
++static int emac_mdio_setup_aneg(struct mii_phy *phy, u32 advertise) {
++	struct net_device *ndev = phy->dev;
++	struct emac_instance *dev = netdev_priv(ndev);
++
++	dev->phy.autoneg = AUTONEG_ENABLE;
++	dev->phy.speed = SPEED_1000;
++	dev->phy.duplex = DUPLEX_FULL;
++	dev->phy.advertising = advertise;
++	phy->autoneg = AUTONEG_ENABLE;
++	phy->speed = dev->phy.speed;
++	phy->duplex = dev->phy.duplex;
++	phy->advertising = advertise;
++	return phy_start_aneg(dev->phy_dev);
++}
++
++static int emac_mdio_setup_forced(struct mii_phy *phy, int speed, int fd) {
++	struct net_device *ndev = phy->dev;
++	struct emac_instance *dev = netdev_priv(ndev);
++
++	dev->phy.autoneg =  AUTONEG_DISABLE;
++	dev->phy.speed = speed;
++	dev->phy.duplex = fd;
++	phy->autoneg = AUTONEG_DISABLE;
++	phy->speed = speed;
++	phy->duplex = fd;
++	return phy_start_aneg(dev->phy_dev);
++}
++
++static int emac_mdio_poll_link(struct mii_phy *phy) {
++	struct net_device *ndev = phy->dev;
++	struct emac_instance *dev = netdev_priv(ndev);
++	int res= phy_read_status(dev->phy_dev);
++	if (res) {
++		dev_err(&dev->ofdev->dev, "link update failed (%d).", res);
++		return ethtool_op_get_link(ndev);
++	}
++
++	return dev->phy_dev->link;
++}
++
++static int emac_mdio_read_link(struct mii_phy *phy) {
++	struct net_device *ndev = phy->dev;
++	struct emac_instance *dev = netdev_priv(ndev);
++	int res = phy_read_status(dev->phy_dev);
++	if (res) return res;
++
++	dev->phy.speed = phy->speed;
++	dev->phy.duplex = phy->duplex;
++	dev->phy.pause = phy->pause;
++	dev->phy.asym_pause = phy->asym_pause;
++	return 0;
++}
++
++static int emac_mdio_init_phy(struct mii_phy *phy) {
++	struct net_device *ndev = phy->dev;
++	struct emac_instance *dev = netdev_priv(ndev);
++
++	phy_start(dev->phy_dev);
++	dev->phy.autoneg = phy->autoneg;
++	dev->phy.speed = phy->speed;
++	dev->phy.duplex = phy->duplex;
++	dev->phy.advertising = phy->advertising;
++	dev->phy.pause = phy->pause;
++	dev->phy.asym_pause = phy->asym_pause;
++
++	return phy_init_hw(dev->phy_dev);
++}
++
++static const struct mii_phy_ops emac_dt_mdio_phy_ops = {
++	.init		= emac_mdio_init_phy,
++	.setup_aneg	= emac_mdio_setup_aneg,
++	.setup_forced	= emac_mdio_setup_forced,
++	.poll_link	= emac_mdio_poll_link,
++	.read_link	= emac_mdio_read_link,
++};
++
++static int emac_dt_mdio_probe(struct emac_instance *dev) {
++	struct device_node *mii_np;
++	int res;
++
++	mii_np = of_get_child_by_name(dev->ofdev->dev.of_node, "mdio");
++	if (!mii_np) {
++		dev_err(&dev->ofdev->dev, "no mdio definition found.");
++		return -ENODEV;
++	}
++
++	if (!of_device_is_available(mii_np)) {
++		res = 1;
++		goto put_node;
++	}
++
++	dev->mii_bus = devm_mdiobus_alloc(&dev->ofdev->dev);
++	if (!dev->mii_bus) {
++		res = -ENOMEM;
++		goto put_node;
++	}
++
++	dev->mii_bus->priv = dev->ndev;
++	dev->mii_bus->parent = dev->ndev->dev.parent;
++	dev->mii_bus->name = "emac_mdio";
++	dev->mii_bus->read = &emac_mii_bus_read;
++	dev->mii_bus->write = &emac_mii_bus_write;
++	dev->mii_bus->reset = &emac_mii_bus_reset;
++	snprintf(dev->mii_bus->id, MII_BUS_ID_SIZE, "%s", dev->ofdev->name);
++	res = of_mdiobus_register(dev->mii_bus, mii_np);
++	if (res) dev_err(&dev->ofdev->dev, "cannot register MDIO bus %s (%d)", dev->mii_bus->name, res);
++
++ put_node:
++	of_node_put(mii_np);
++	return res;
++}
++
++static int emac_dt_phy_connect(struct emac_instance *dev, struct device_node *phy_handle) {
++	dev->phy.def = devm_kzalloc(&dev->ofdev->dev, sizeof(*dev->phy.def), GFP_KERNEL);
++	if (!dev->phy.def) return -ENOMEM;
++
++	dev->phy_dev = of_phy_connect(dev->ndev, phy_handle, &emac_adjust_link, 0, dev->phy_mode);
++	if (!dev->phy_dev) {
++		dev_err(&dev->ofdev->dev, "failed to connect to PHY.\n");
++		return -ENODEV;
++	}
++
++	dev->phy.def->phy_id = dev->phy_dev->drv->phy_id;
++	dev->phy.def->phy_id_mask = dev->phy_dev->drv->phy_id_mask;
++	dev->phy.def->name = dev->phy_dev->drv->name;
++	dev->phy.def->ops = &emac_dt_mdio_phy_ops;
++	dev->phy.features = dev->phy_dev->supported;
++	dev->phy.address = dev->phy_dev->mdio.addr;
++	dev->phy.mode = dev->phy_dev->interface;
++	return 0;
++}
++
++static int emac_dt_phy_probe(struct emac_instance *dev) {
++	int res = 1;
++	struct device_node *np = dev->ofdev->dev.of_node;
++	struct device_node *phy_handle = of_parse_phandle(np, "phy-handle", 0);
++
++	if (phy_handle) {
++		res = emac_dt_mdio_probe(dev);
++		if (!res) {
++			res = emac_dt_phy_connect(dev, phy_handle);
++			if (res) mdiobus_unregister(dev->mii_bus);
++		}
++	}
++
++	of_node_put(phy_handle);
++	return res;
++}
++
++/*
++static int emac_dt_phy_probe(struct emac_instance *dev) {
++	int res = 1;
++	struct device_node *np = dev->ofdev->dev.of_node;
++	struct device_node *phy_handle = of_parse_phandle(np, "phy-handle", 0);
++	u32 phy_flags = 0;
++	int res = of_property_read_u32(phy_handle, "phy-flags", &phy_flags);
++	if (res < 0 && res != -EINVAL) return res;
++
++	dev->phy.def = devm_kzalloc(&dev->ofdev->dev, sizeof(*dev->phy.def), GFP_KERNEL);
++	if (!dev->phy.def) return -ENOMEM;
++
++	dev->phy_dev = of_phy_connect(dev->ndev, phy_handle, &emac_adjust_link, phy_flags,
++				      PHY_INTERFACE_MODE_RGMII);
++	if (!dev->phy_dev) {
++		dev_err(&dev->ofdev->dev, "failed to connect to PHY.\n");
++		return -ENODEV;
++	}
++
++	dev->phy.def->phy_id = dev->phy_dev->drv->phy_id;
++	dev->phy.def->phy_id_mask = dev->phy_dev->drv->phy_id_mask;
++	dev->phy.def->name = dev->phy_dev->drv->name;
++	dev->phy.def->ops = &emac_dt_mdio_phy_ops;
++	dev->phy.features = dev->phy_dev->supported;
++	dev->phy.address = dev->phy_dev->mdio.addr;
++	dev->phy.mode = dev->phy_dev->interface;
++	return 0;
++}
++
++static int emac_probe_dt_phy(struct emac_instance *dev) {
++	struct device_node *np = dev->ofdev->dev.of_node;
++	int res = 0;
++
++	struct device_node *phy_handle = of_parse_phandle(np, "phy-handle", 0);
++	if (phy_handle) {
++		res = emac_dt_mdio_probe(dev);
++		if (!res) {
++			res = emac_dt_phy_probe(dev, phy_handle);
++			if (!res) res = 1;
++			else mdiobus_unregister(dev->mii_bus);
++		}
++	}
++
++	of_node_put(phy_handle);
++	// if no phy device was specified in the device tree, then we fallback to the old emac_phy.c probe code for compatibility reasons
++	return res;
++}
++*/
 +static int emac_init_phy(struct emac_instance *dev) {
  	struct device_node *np = dev->ofdev->dev.of_node;
  	struct net_device *ndev = dev->ndev;
  	u32 phy_map, adv;
-@@ -2680,17 +2682,12 @@
+@@ -2447,17 +2720,12 @@
  	if (dev->phy_address == 0xffffffff && dev->phy_map == 0xffffffff) {
  		emac_reset(dev);
  
@@ -3152,7 +3194,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  		return 0;
  	}
  
-@@ -2719,39 +2716,28 @@
+@@ -2486,23 +2754,27 @@
  	 * This is needed mostly for 440GX
  	 */
  	if (emac_phy_gpcs(dev->phy.mode)) {
@@ -3175,31 +3217,24 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  
  	emac_configure(dev);
  
- 	if (emac_has_feature(dev, EMAC_FTR_HAS_RGMII)) {
- 		int res = emac_probe_dt_phy(dev);
--
- 		if (res == 1) {
- 			mutex_unlock(&emac_phy_map_lock);
- 			goto init_phy;
- 		} else if (res < 0) {
- 			mutex_unlock(&emac_phy_map_lock);
--			dev_err(&dev->ofdev->dev, "failed to attach dt phy (%d).\n",
--			       res);
-+			dev_err(&dev->ofdev->dev, "failed to attach dt phy (%d).\n", res);
- 			return res;
- 		}
-+	} /* continue with old code */
- 
--		/* continue with old code */
--	}
--
 -	if (dev->phy_address != 0xffffffff)
 -		phy_map = ~(1 << dev->phy_address);
++	if (emac_has_feature(dev, EMAC_FTR_HAS_RGMII)) {
++		int res = emac_dt_phy_probe(dev);
++		if (res != 1) {
++			mutex_unlock(&emac_phy_map_lock);
++			if (res == 0) goto init_phy;	
++			dev_err(&dev->ofdev->dev, "failed to attach dt phy (%d).\n", res);
++			return res;
++		}
++		// else = No phy-handle property configured. Continue with the existing phy probe and setup code
++	}
++
 +	if (dev->phy_address != 0xffffffff)	phy_map = ~(1 << dev->phy_address);
  
  	for (i = 0; i < 0x20; phy_map >>= 1, ++i)
  		if (!(phy_map & 1)) {
-@@ -2760,10 +2746,8 @@
+@@ -2511,10 +2783,8 @@
  
  			/* Quick check if there is a PHY at the address */
  			r = emac_mdio_read(dev->ndev, i, MII_BMCR);
@@ -3212,7 +3247,15 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  		}
  
  	/* Enable external clock source */
-@@ -2801,15 +2785,12 @@
+@@ -2528,6 +2798,7 @@
+ 		return -ENXIO;
+ 	}
+ 
++ init_phy:
+ 	/* Init PHY */
+ 	if (dev->phy.def->ops->init)
+ 		dev->phy.def->ops->init(&dev->phy);
+@@ -2551,15 +2822,12 @@
  		if (f & SUPPORTED_1000baseT_Full) {
  			speed = SPEED_1000;
  			fd = DUPLEX_FULL;
@@ -3231,7 +3274,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  
  		/* Force link parameters */
  		dev->phy.def->ops->setup_forced(&dev->phy, speed, fd);
-@@ -2817,94 +2798,68 @@
+@@ -2567,94 +2835,68 @@
  	return 0;
  }
  
@@ -3290,7 +3333,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 +	if (emac_read_prop(np, "mal-tx-channel", &dev->mal_tx_chan, 1)) return -ENXIO;
 +	if (emac_read_prop(np, "mal-rx-channel", &dev->mal_rx_chan, 1)) return -ENXIO;
 +	if (emac_read_prop(np, "cell-index", &dev->cell_index, 1))	return -ENXIO;
-+	if (emac_read_prop(np, "max-frame-size", &dev->max_mtu, 0)) dev->max_mtu = 1500;
++	if (emac_read_prop(np, "max-frame-size", &dev->max_mtu, 0)) dev->max_mtu = ETH_DATA_LEN;
 +	if (emac_read_prop(np, "rx-fifo-size", &dev->rx_fifo_size, 0))	dev->rx_fifo_size = 2048;
 +	if (emac_read_prop(np, "tx-fifo-size", &dev->tx_fifo_size, 0))	dev->tx_fifo_size = 2048;
 +	if (emac_read_prop(np, "rx-fifo-size-gige", &dev->rx_fifo_size_gige, 0)) dev->rx_fifo_size_gige = dev->rx_fifo_size;
@@ -3335,7 +3378,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 +		if (of_device_is_compatible(np, "ibm,emac-apm821xx"))
  			dev->features |= (EMAC_APM821XX_REQ_JUMBO_FRAME_SIZE |
 -					  EMAC_FTR_APM821XX_NO_HALF_DUPLEX |
--					  EMAC_FTR_APM821XX_PHY_CLK_FIX);
+-					  EMAC_FTR_460EX_PHY_CLK_FIX);
 -		}
 +				EMAC_FTR_APM821XX_NO_HALF_DUPLEX | EMAC_FTR_APM821XX_PHY_CLK_FIX);
 +
@@ -3362,7 +3405,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	}
  
  	/* Fixup some feature bits based on the device tree */
-@@ -2915,16 +2870,14 @@
+@@ -2665,16 +2907,14 @@
  
  	/* CAB lacks the appropriate properties */
  	if (of_device_is_compatible(np, "ibm,emac-axon"))
@@ -3381,7 +3424,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  		return -ENXIO;
  #endif
  	}
-@@ -2933,8 +2886,7 @@
+@@ -2683,8 +2923,7 @@
  #ifdef CONFIG_IBM_EMAC_ZMII
  		dev->features |= EMAC_FTR_HAS_ZMII;
  #else
@@ -3391,7 +3434,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  		return -ENXIO;
  #endif
  	}
-@@ -2943,8 +2895,7 @@
+@@ -2693,8 +2932,7 @@
  #ifdef CONFIG_IBM_EMAC_RGMII
  		dev->features |= EMAC_FTR_HAS_RGMII;
  #else
@@ -3401,7 +3444,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  		return -ENXIO;
  #endif
  	}
-@@ -2952,8 +2903,7 @@
+@@ -2702,8 +2940,7 @@
  	/* Read MAC-address */
  	p = of_get_property(np, "local-mac-address", NULL);
  	if (p == NULL) {
@@ -3411,21 +3454,28 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  		return -ENXIO;
  	}
  	memcpy(dev->ndev->dev_addr, p, ETH_ALEN);
-@@ -2976,66 +2926,60 @@
+@@ -2716,6 +2953,9 @@
+ 		dev->xaht_slots_shift = EMAC4_XAHT_SLOTS_SHIFT;
+ 		dev->xaht_width_shift = EMAC4_XAHT_WIDTH_SHIFT;
+ 	}
++	/* This should never happen */
++	if (WARN_ON(EMAC_XAHT_REGS(dev) > EMAC_XAHT_MAX_REGS))
++		return -ENXIO;
+ 
+ 	DBG(dev, "features     : 0x%08x / 0x%08x\n", dev->features, EMAC_FTRS_POSSIBLE);
+ 	DBG(dev, "tx_fifo_size : %d (%d gige)\n", dev->tx_fifo_size, dev->tx_fifo_size_gige);
+@@ -2725,7 +2965,9 @@
+ 
  	return 0;
  }
- #ifdef CONFIG_NET_POLL_CONTROLLER
--static void emac_netpoll(struct net_device *dev){
--}
+-
++#ifdef CONFIG_NET_POLL_CONTROLLER
 +static void emac_netpoll(struct net_device *dev){}
- #endif
++#endif
  static const struct net_device_ops emac_netdev_ops = {
--	.ndo_open		= emac_open,
--	.ndo_stop		= emac_close,
-+	.ndo_open			= emac_open,
-+	.ndo_stop			= emac_close,
- 	.ndo_get_stats		= emac_stats,
- 	.ndo_set_rx_mode	= emac_set_multicast_list,
+ 	.ndo_open		= emac_open,
+ 	.ndo_stop		= emac_close,
+@@ -2734,9 +2976,12 @@
  	.ndo_do_ioctl		= emac_ioctl,
  	.ndo_tx_timeout		= emac_tx_timeout,
  	.ndo_validate_addr	= eth_validate_addr,
@@ -3433,19 +3483,13 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 +	.ndo_set_mac_address= emac_set_mac_address,
  	.ndo_start_xmit		= emac_start_xmit,
  	.ndo_change_mtu		= eth_change_mtu,
- #ifdef CONFIG_NET_POLL_CONTROLLER
--	.ndo_poll_controller     = emac_netpoll,
++#ifdef CONFIG_NET_POLL_CONTROLLER
 +	.ndo_poll_controller= emac_netpoll,
- #endif
++#endif
  };
  
  static const struct net_device_ops emac_gige_netdev_ops = {
--	.ndo_open		= emac_open,
--	.ndo_stop		= emac_close,
-+	.ndo_open			= emac_open,
-+	.ndo_stop			= emac_close,
- 	.ndo_get_stats		= emac_stats,
- 	.ndo_set_rx_mode	= emac_set_multicast_list,
+@@ -2747,36 +2992,34 @@
  	.ndo_do_ioctl		= emac_ioctl,
  	.ndo_tx_timeout		= emac_tx_timeout,
  	.ndo_validate_addr	= eth_validate_addr,
@@ -3453,10 +3497,9 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 +	.ndo_set_mac_address= emac_set_mac_address,
  	.ndo_start_xmit		= emac_start_xmit_sg,
  	.ndo_change_mtu		= emac_change_mtu,
- #ifdef CONFIG_NET_POLL_CONTROLLER
--	.ndo_poll_controller     = emac_netpoll,
++#ifdef CONFIG_NET_POLL_CONTROLLER
 +	.ndo_poll_controller= emac_netpoll,
- #endif
++#endif
  };
  
 -static int emac_probe(struct platform_device *ofdev)
@@ -3492,7 +3535,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  
  	dev = netdev_priv(ndev);
  	dev->ndev = ndev;
-@@ -3051,8 +2995,7 @@
+@@ -2792,8 +3035,7 @@
  
  	/* Init various config data based on device-tree */
  	err = emac_init_config(dev);
@@ -3502,7 +3545,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  
  	/* Get interrupts. EMAC irq is mandatory, WOL irq is optional */
  	dev->emac_irq = irq_of_parse_and_map(np, 0);
-@@ -3065,16 +3008,13 @@
+@@ -2806,16 +3048,13 @@
  
  	/* Map EMAC regs */
  	if (of_address_to_resource(np, 0, &dev->rsrc_regs)) {
@@ -3522,7 +3565,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  		err = -ENOMEM;
  		goto err_irq_unmap;
  	}
-@@ -3082,15 +3022,12 @@
+@@ -2823,15 +3062,12 @@
  	/* Wait for dependent devices */
  	err = emac_wait_deps(dev);
  	if (err) {
@@ -3540,7 +3583,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  
  	/* Register with MAL */
  	dev->commac.ops = &emac_commac_ops;
-@@ -3120,7 +3057,9 @@
+@@ -2861,7 +3097,9 @@
  	memset(dev->rx_desc, 0, NUM_RX_BUFF * sizeof(struct mal_descriptor));
  	memset(dev->tx_skb, 0, NUM_TX_BUFF * sizeof(struct sk_buff *));
  	memset(dev->rx_skb, 0, NUM_RX_BUFF * sizeof(struct sk_buff *));
@@ -3551,7 +3594,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	/* Attach to ZMII, if needed */
  	if (emac_has_feature(dev, EMAC_FTR_HAS_ZMII) &&
  	    (err = zmii_attach(dev->zmii_dev, dev->zmii_port, &dev->phy_mode)) != 0)
-@@ -3145,48 +3084,46 @@
+@@ -2886,48 +3124,46 @@
  	INIT_DELAYED_WORK(&dev->link_work, emac_link_timer);
  
  	/* Some SoCs like APM821xx does not support Half Duplex mode. */
@@ -3614,7 +3657,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	printk(KERN_INFO "%s: EMAC-%d %s, MAC %pM\n",
  	       ndev->name, dev->cell_index, np->full_name, ndev->dev_addr);
  
-@@ -3194,25 +3131,31 @@
+@@ -2935,25 +3171,31 @@
  		printk(KERN_NOTICE "%s: in SGMII mode\n", ndev->name);
  
  	if (dev->phy.address >= 0)
@@ -3624,7 +3667,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  
 -	emac_dbg_register(dev);
 +	/* performance optimization: cache time crtical register addresses */
-+	dev->mr0 = &dev->emacp->mr0;
++	dev->mr0 = &dev->emacp->mr0; //ECO
 +	dev->tmr0 = &dev->emacp->tmr0;
  
 -	/* Life is good */
@@ -3658,7 +3701,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
   err_unreg_commac:
  	mal_unregister_commac(dev->mal, &dev->commac);
   err_rel_deps:
-@@ -3220,47 +3163,39 @@
+@@ -2961,41 +3203,39 @@
   err_reg_unmap:
  	iounmap(dev->emacp);
   err_irq_unmap:
@@ -3710,18 +3753,12 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
 -	if (emac_has_feature(dev, EMAC_FTR_HAS_ZMII))
 -		zmii_detach(dev->zmii_dev, dev->zmii_port);
 -
--	if (dev->phy_dev)
--		phy_disconnect(dev->phy_dev);
--
--	if (dev->mii_bus)
--		mdiobus_unregister(dev->mii_bus);
--
 +	if (dev->phy_dev) phy_disconnect(dev->phy_dev);
 +	if (dev->mii_bus) mdiobus_unregister(dev->mii_bus);
  	busy_phy_map &= ~(1 << dev->phy.address);
  	DBG(dev, "busy_phy_map now %#x" NL, busy_phy_map);
  
-@@ -3270,31 +3205,21 @@
+@@ -3005,31 +3245,21 @@
  	emac_dbg_unregister(dev);
  	iounmap(dev->emacp);
  
@@ -3762,7 +3799,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	{},
  };
  MODULE_DEVICE_TABLE(of, emac_match);
-@@ -3308,8 +3233,7 @@
+@@ -3043,8 +3273,7 @@
  	.remove = emac_remove,
  };
  
@@ -3772,7 +3809,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	struct device_node *np = NULL;
  	int j, max, i = 0;
  	int cell_indices[EMAC_BOOT_LIST_SIZE];
-@@ -3318,13 +3242,10 @@
+@@ -3053,13 +3282,10 @@
  	while((np = of_find_all_nodes(np)) != NULL) {
  		const u32 *idx;
  
@@ -3789,7 +3826,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  		cell_indices[i] = *idx;
  		emac_boot_list[i++] = of_node_get(np);
  		if (i >= EMAC_BOOT_LIST_SIZE) {
-@@ -3344,35 +3265,24 @@
+@@ -3079,35 +3305,24 @@
  		}
  }
  
@@ -3833,7 +3870,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	return 0;
  
   err_tah:
-@@ -3387,12 +3297,10 @@
+@@ -3122,12 +3337,10 @@
  	return rc;
  }
  
@@ -3847,7 +3884,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  	tah_exit();
  	rgmii_exit();
  	zmii_exit();
-@@ -3400,8 +3308,7 @@
+@@ -3135,8 +3348,7 @@
  	emac_fini_debug();
  
  	/* Destroy EMAC boot list */
@@ -3858,12 +3895,14 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.c b/drivers/net/ethernet/ibm/ema
  
  module_init(emac_init);
 diff -Naur a/drivers/net/ethernet/ibm/emac/core.h b/drivers/net/ethernet/ibm/emac/core.h
---- a/drivers/net/ethernet/ibm/emac/core.h	2017-10-05 15:12:47.926736778 +0000
-+++ b/drivers/net/ethernet/ibm/emac/core.h	2017-07-07 08:37:01.117167875 +0000
+--- a/drivers/net/ethernet/ibm/emac/core.h	2019-01-09 0116:16:45.000000000 +0000
++++ b/drivers/net/ethernet/ibm/emac/core.h	2019-02-16 13:50:23.589563000 +0000
 @@ -46,13 +46,39 @@
  #include "tah.h"
  #include "debug.h"
  
+-#define NUM_TX_BUFF			CONFIG_IBM_EMAC_TXB
+-#define NUM_RX_BUFF			CONFIG_IBM_EMAC_RXB
 +#define EMAC_HW_TSO
 +
 +/* MDIO macro's */
@@ -3874,13 +3913,13 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.h b/drivers/net/ethernet/ibm/ema
 +#define MDIO(op, dev)		CONCAT(zmii_,op,_mdio)(dev->zmii_dev, dev->zmii_port)		
 +#endif
 +
- #define NUM_TX_BUFF			CONFIG_IBM_EMAC_TXB
- #define NUM_RX_BUFF			CONFIG_IBM_EMAC_RXB
- 
++#define NUM_TX_BUFF		CONFIG_IBM_EMAC_TXB
++#define NUM_RX_BUFF		CONFIG_IBM_EMAC_RXB
++
 +#ifdef CONFIG_IBM_EMAC_MASK_CEXT
 +#define TX_FIFO_SYNC_USEC	20
 +#endif
-+
+ 
  /* Simple sanity check */
  #if NUM_TX_BUFF > 256 || NUM_RX_BUFF > 256
  #error Invalid number of buffer descriptors (greater than 256)
@@ -3936,7 +3975,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.h b/drivers/net/ethernet/ibm/ema
  	return EMAC_DMA_ALIGN(emac_rx_size(mtu) + 2);
  }
  
-@@ -162,41 +182,40 @@
+@@ -162,8 +182,7 @@
  };
  
  #define EMAC_ETHTOOL_STATS_COUNT	((sizeof(struct emac_stats) + \
@@ -3946,185 +3985,69 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.h b/drivers/net/ethernet/ibm/ema
  
  struct emac_instance {
  	struct net_device		*ndev;
- 	struct resource			rsrc_regs;
- 	struct emac_regs		__iomem *emacp;
--	struct platform_device		*ofdev;
-+	struct platform_device	*ofdev;
- 	struct device_node		**blist; /* bootlist entry */
- 
- 	/* MAL linkage */
--	u32				mal_ph;
--	struct platform_device		*mal_dev;
--	u32				mal_rx_chan;
--	u32				mal_tx_chan;
-+	u32						mal_ph;
-+	struct platform_device	*mal_dev;
-+	u32						mal_rx_chan;
-+	u32						mal_tx_chan;
- 	struct mal_instance		*mal;
- 	struct mal_commac		commac;
- 
- 	/* PHY infos */
--	int				phy_mode;
--	u32				phy_map;
--	u32				phy_address;
--	u32				phy_feat_exc;
-+	int						phy_mode;
-+	u32						phy_map;
-+	u32						phy_address;
-+	u32						phy_feat_exc;
- 	struct mii_phy			phy;
- 	struct mutex			link_lock;
- 	struct delayed_work		link_work;
--	int				link_polling;
-+	int						link_polling;
- 
- 	/* GPCS PHY infos */
--	u32				gpcs_address;
-+	u32						gpcs_address;
- 
- 	/* Shared MDIO if any */
--	u32				mdio_ph;
--	struct platform_device		*mdio_dev;
--	struct emac_instance		*mdio_instance;
-+	u32						mdio_ph;
-+	struct platform_device	*mdio_dev;
-+	struct emac_instance	*mdio_instance;
+@@ -199,6 +218,10 @@
+ 	struct emac_instance		*mdio_instance;
  	struct mutex			mdio_lock;
  
- 	/* Device-tree based phy configuration */
-@@ -204,177 +223,152 @@
- 	struct phy_device		*phy_dev;
- 
++	/* Device-tree based phy configuration */
++	struct mii_bus			*mii_bus;
++	struct phy_device		*phy_dev;
++
  	/* ZMII infos if any */
--	u32				zmii_ph;
--	u32				zmii_port;
--	struct platform_device		*zmii_dev;
-+	u32						zmii_ph;
-+	u32						zmii_port;
-+	struct platform_device	*zmii_dev;
- 
- 	/* RGMII infos if any */
--	u32				rgmii_ph;
--	u32				rgmii_port;
-+	u32						rgmii_ph;
-+	u32						rgmii_port;
- 	struct platform_device		*rgmii_dev;
- 
- 	/* TAH infos if any */
--	u32				tah_ph;
--	u32				tah_port;
--	struct platform_device		*tah_dev;
-+	u32						tah_ph;
-+	u32						tah_port;
-+	struct platform_device	*tah_dev;
- 
- 	/* IRQs */
--	int				wol_irq;
--	int				emac_irq;
-+	int						wol_irq;
-+	int						emac_irq;
- 
+ 	u32				zmii_ph;
+ 	u32				zmii_port;
+@@ -221,6 +244,11 @@
  	/* OPB bus frequency in Mhz */
--	u32				opb_bus_freq;
-+	u32						opb_bus_freq;
-+	
+ 	u32				opb_bus_freq;
+ 
 +#ifdef CONFIG_IBM_EMAC_INTR_COALESCE
 +	/* PLB bus frequency in Mhz */
-+	u32						plb_bus_freq;
++	u32				plb_bus_freq;
 +#endif
- 
++
  	/* Cell index within an ASIC (for clk mgmnt) */
--	u32				cell_index;
-+	u32						cell_index;
+ 	u32				cell_index;
  
- 	/* Max supported MTU */
--	u32				max_mtu;
-+	u32						max_mtu;
- 
- 	/* Feature bits (from probe table) */
- 	unsigned int			features;
- 
- 	/* Tx and Rx fifo sizes & other infos in bytes */
--	u32				tx_fifo_size;
--	u32				tx_fifo_size_gige;
--	u32				rx_fifo_size;
--	u32				rx_fifo_size_gige;
--	u32				fifo_entry_size;
--	u32				mal_burst_size; /* move to MAL ? */
-+	u32						tx_fifo_size;
-+	u32						tx_fifo_size_gige;
-+	u32						rx_fifo_size;
-+	u32						rx_fifo_size_gige;
-+	u32						fifo_entry_size;
-+	u32						mal_burst_size; /* move to MAL ? */
- 
- 	/* IAHT and GAHT filter parameterization */
--	u32				xaht_slots_shift;
--	u32				xaht_width_shift;
-+	u32						xaht_slots_shift;
-+	u32						xaht_width_shift;
+@@ -242,8 +270,7 @@
+ 	u32				xaht_slots_shift;
+ 	u32				xaht_width_shift;
  
 -	/* Descriptor management
 -	 */
--	struct mal_descriptor		*tx_desc;
--	int				tx_cnt;
--	int				tx_slot;
--	int				ack_slot;
 +	/* Descriptor management */
-+	struct mal_descriptor	*tx_desc;
-+	int						tx_cnt;
-+	int						tx_slot;
-+	int						ack_slot;
- 
--	struct mal_descriptor		*rx_desc;
--	int				rx_slot;
-+	struct mal_descriptor	*rx_desc;
-+	int						rx_slot;
- 	struct sk_buff			*rx_sg_skb;	/* 1 */
--	int 				rx_skb_size;
--	int				rx_sync_size;
-+	int 					rx_skb_size;
-+	int						rx_sync_size;
- 
+ 	struct mal_descriptor		*tx_desc;
+ 	int				tx_cnt;
+ 	int				tx_slot;
+@@ -258,117 +285,89 @@
  	struct sk_buff			*tx_skb[NUM_TX_BUFF];
  	struct sk_buff			*rx_skb[NUM_RX_BUFF];
  
 -	/* Stats
 -	 */
--	struct emac_error_stats		estats;
--	struct net_device_stats		nstats;
 +	/* Stats */
-+	struct emac_error_stats	estats;
-+	struct net_device_stats	nstats;
+ 	struct emac_error_stats		estats;
+ 	struct net_device_stats		nstats;
  	struct emac_stats 		stats;
  
 -	/* Misc
 -	 */
--	int				reset_failed;
--	int				stop_timeout;	/* in us */
--	int				no_mcast;
--	int				mcast_pending;
--	int				opened;
 +	/* Misc	 */
 +#ifdef CONFIG_IBM_EMAC_MASK_CEXT
-+	atomic_t				idle_mode;
-+	atomic_t 				mask_cext_enable;
++	atomic_t			idle_mode;
++	atomic_t 			mask_cext_enable;
 +#endif
-+
-+	int						reset_failed;
-+	int						stop_timeout;	/* in us */
-+	int						no_mcast;
-+	int						mcast_pending;
-+	int						opened;
-+	u32 __iomem				*mr0;			/* Special ECO */
-+	u32 __iomem				*tmr0;			/* Special ECO */
+ 	int				reset_failed;
+ 	int				stop_timeout;	/* in us */
+ 	int				no_mcast;
+ 	int				mcast_pending;
+ 	int				opened;
++	u32 __iomem			*mr0;			/* Special ECO */
++	u32 __iomem			*tmr0;			/* Special ECO */
 +#if defined(CONFIG_IBM_EMAC_TAH) && defined(EMAC_HW_TSO)  //ECO
-+	u32						*ssr;			/* Special ECO */
++	u32				*ssr;			/* Special ECO */
 +#endif
  	struct work_struct		reset_work;
--	spinlock_t			lock;
-+	spinlock_t				lock;
+ 	spinlock_t			lock;
  };
  
 -/*
@@ -4135,43 +4058,38 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.h b/drivers/net/ethernet/ibm/ema
 -/*
 - * No flow control on 40x according to the original driver
 - */
--#define EMAC_FTR_NO_FLOW_CONTROL_40x	0x00000001
++/* No flow control on 40x according to the original driver*/
+ #define EMAC_FTR_NO_FLOW_CONTROL_40x	0x00000001
 -/*
 - * Cell is an EMAC4
 - */
--#define EMAC_FTR_EMAC4			0x00000002
++/* Cell is an EMAC4 */
+ #define EMAC_FTR_EMAC4			0x00000002
 -/*
 - * For the 440SPe, AMCC inexplicably changed the polarity of
 - * the "operation complete" bit in the MII control register.
 - */
-+/* No flow control on 40x according to the original driver*/
-+#define EMAC_FTR_NO_FLOW_CONTROL_40x 0x00000001
-+/* Cell is an EMAC4 */
-+#define EMAC_FTR_EMAC4				0x00000002
 +/* For the 440SPe, AMCC inexplicably changed the polarity of
 + * the "operation complete" bit in the MII control register */
  #define EMAC_FTR_STACR_OC_INVERT	0x00000004
 -/*
 - * Set if we have a TAH.
 - */
--#define EMAC_FTR_HAS_TAH		0x00000008
++/* Set if we have a TAH.*/
+ #define EMAC_FTR_HAS_TAH		0x00000008
 -/*
 - * Set if we have a ZMII.
 - */
--#define EMAC_FTR_HAS_ZMII		0x00000010
++/* Set if we have a ZMII.*/
+ #define EMAC_FTR_HAS_ZMII		0x00000010
 -/*
 - * Set if we have a RGMII.
 - */
--#define EMAC_FTR_HAS_RGMII		0x00000020
++/* Set if we have a RGMII.*/
+ #define EMAC_FTR_HAS_RGMII		0x00000020
 -/*
 - * Set if we have new type STACR with STAOPC
 - */
-+/* Set if we have a TAH.*/
-+#define EMAC_FTR_HAS_TAH			0x00000008
-+/* Set if we have a ZMII.*/
-+#define EMAC_FTR_HAS_ZMII			0x00000010
-+/* Set if we have a RGMII.*/
-+#define EMAC_FTR_HAS_RGMII			0x00000020
 +/* Set if we have new type STACR with STAOPC */
  #define EMAC_FTR_HAS_NEW_STACR		0x00000040
 -/*
@@ -4187,26 +4105,26 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.h b/drivers/net/ethernet/ibm/ema
 -/*
 - * The 405EX and 460EX contain the EMAC4SYNC core
 - */
--#define EMAC_FTR_EMAC4SYNC		0x00000200
++/* The 405EX and 460EX contain the EMAC4SYNC core */
+ #define EMAC_FTR_EMAC4SYNC		0x00000200
 -/*
 - * Set if we need phy clock workaround for 460ex or 460gt
 - */
-+/* The 405EX and 460EX contain the EMAC4SYNC core */
-+#define EMAC_FTR_EMAC4SYNC			0x00000200
 +/* Set if we need phy clock workaround for 460ex or 460gt */
  #define EMAC_FTR_460EX_PHY_CLK_FIX	0x00000400
 -/*
 - * APM821xx requires Jumbo frame size set explicitly
 - */
-+/* APM821xx requires Jumbo frame size set explicitly */
- #define EMAC_APM821XX_REQ_JUMBO_FRAME_SIZE	0x00000800
+-#define EMAC_APM821XX_REQ_JUMBO_FRAME_SIZE	0x00000800
 -/*
 - * APM821xx does not support Half Duplex mode
 - */
+-#define EMAC_FTR_APM821XX_NO_HALF_DUPLEX	0x00001000
++/* APM821xx requires Jumbo frame size set explicitly */
++#define EMAC_APM821XX_REQ_JUMBO_FRAME_SIZE 0x00000800
 +/* APM821xx does not support Half Duplex mode */
- #define EMAC_FTR_APM821XX_NO_HALF_DUPLEX	0x00001000
--
- #define EMAC_FTR_APM821XX_PHY_CLK_FIX	0x000002000
++#define EMAC_FTR_APM821XX_NO_HALF_DUPLEX 0x00001000
++#define EMAC_FTR_APM821XX_PHY_CLK_FIX	0x000002000
  
  /* Right now, we don't quite handle the always/possible masks on the
   * most optimal way as we don't have a way to say something like
@@ -4258,9 +4176,12 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.h b/drivers/net/ethernet/ibm/ema
  }
  
  /*
-@@ -394,52 +388,35 @@
+@@ -387,53 +386,38 @@
+ 
  #define	EMAC4SYNC_XAHT_SLOTS_SHIFT	8
  #define	EMAC4SYNC_XAHT_WIDTH_SHIFT	5
++/* The largest span between slots and widths above is 3 */
++#define	EMAC_XAHT_MAX_REGS		    (1 << 3)
  
 -#define	EMAC_XAHT_SLOTS(dev)         	(1 << (dev)->xaht_slots_shift)
 -#define	EMAC_XAHT_WIDTH(dev)         	(1 << (dev)->xaht_width_shift)
@@ -4329,8 +4250,8 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/core.h b/drivers/net/ethernet/ibm/ema
  }
  
 diff -Naur a/drivers/net/ethernet/ibm/emac/debug.c b/drivers/net/ethernet/ibm/emac/debug.c
---- a/drivers/net/ethernet/ibm/emac/debug.c	2017-10-05 07:44:17.000000000 +0000
-+++ b/drivers/net/ethernet/ibm/emac/debug.c	2017-06-25 14:13:39.699423200 +0000
+--- a/drivers/net/ethernet/ibm/emac/debug.c	2019-01-09 16:16:45.000000000 +0000
++++ b/drivers/net/ethernet/ibm/emac/debug.c	2018-10-22 14:57:34.812585000 +0000
 @@ -28,13 +28,10 @@
  
  static DEFINE_SPINLOCK(emac_dbg_lock);
@@ -4537,8 +4458,8 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/debug.c b/drivers/net/ethernet/ibm/em
  }
  #endif				/* CONFIG_MAGIC_SYSRQ */
 diff -Naur a/drivers/net/ethernet/ibm/emac/emac.h b/drivers/net/ethernet/ibm/emac/emac.h
---- a/drivers/net/ethernet/ibm/emac/emac.h	2017-10-05 07:44:17.000000000 +0000
-+++ b/drivers/net/ethernet/ibm/emac/emac.h	2017-07-06 16:56:24.382977900 +0000
+--- a/drivers/net/ethernet/ibm/emac/emac.h	2019-01-09 16:16:45.000000000 +0000
++++ b/drivers/net/ethernet/ibm/emac/emac.h	2019-02-16 13:50:41.814384000 +0000
 @@ -104,18 +104,16 @@
  	} u1;
  };
@@ -4556,7 +4477,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/emac.h b/drivers/net/ethernet/ibm/ema
 -#define PHY_MODE_RTBI	PHY_INTERFACE_MODE_RTBI
 -#define PHY_MODE_SGMII	PHY_INTERFACE_MODE_SGMII
 +/* PHY mode settings (EMAC <-> ZMII/RGMII bridge <-> PHY) */
-+#define PHY_MODE_NA				PHY_INTERFACE_MODE_NA
++#define PHY_MODE_NA			PHY_INTERFACE_MODE_NA
 +#define PHY_MODE_MII			PHY_INTERFACE_MODE_MII
 +#define PHY_MODE_RMII			PHY_INTERFACE_MODE_RMII
 +#define PHY_MODE_SMII			PHY_INTERFACE_MODE_SMII
@@ -4788,8 +4709,8 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/emac.h b/drivers/net/ethernet/ibm/ema
 +
  #endif /* __IBM_NEWEMAC_H */
 diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac/mal.c
---- a/drivers/net/ethernet/ibm/emac/mal.c.orig	2018-06-16 07:52:35.000000000 +0000
-+++ b/drivers/net/ethernet/ibm/emac/mal.c	2018-06-24 18:19:25.742127896 +0000
+--- a/drivers/net/ethernet/ibm/emac/mal.c.orig	2019-01-09 16:16:45.000000000 +0000
++++ b/drivers/net/ethernet/ibm/emac/mal.c	2019-02-16 18:36:30.981820000 +0000
 @@ -30,314 +30,364 @@
  #include <linux/of_irq.h>
  
@@ -4934,7 +4855,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac
 -	 */
 -	if (!(channel % 8))
 -		channel >>= 3;
-+	if (!(channel % 8))	channel >>= 3;
++	if (!(channel % 8)) channel >>= 3;
  
  	spin_lock_irqsave(&mal->lock, flags);
 -
@@ -4960,7 +4881,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac
 +void mal_disable_rx_channel(struct mal_instance *mal, int channel) {
 +	/* On some 4xx PPC's (e.g. 460EX/GT), the rx channel is a multiple of 8,
 +	 * but enabling in MAL_RXCASR needs dividing by 8 value for the bitmask */
-+	if (!(channel % 8))	channel >>= 3;
++	if (!(channel % 8)) channel >>= 3;
  	set_mal_dcrn(mal, MAL_RXCARR, MAL_CHAN_MASK(channel));
 -
  	MAL_DBG(mal, "disable_rx(%d)" NL, channel);
@@ -5058,9 +4979,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac
 -	u32 esr = get_mal_dcrn(mal, MAL_ESR);
 +#define TX_COAL_CNT (CONFIG_IBM_EMAC_TX_COAL_COUNT & COAL_FRAME_MASK)
 +#define RX_COAL_CNT (CONFIG_IBM_EMAC_RX_COAL_COUNT & COAL_FRAME_MASK)
- 
--	/* Clear the error status register */
--	set_mal_dcrn(mal, MAL_ESR, esr);
++
 +inline void mal_enable_coal(struct mal_instance *mal) {
 +#if defined(CONFIG_405EX)
 +	/* Clear the counters */
@@ -5122,6 +5041,8 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac
 +	mtdcri(SDR0, DCRN_SDR0_ICCTRRX3, CONFIG_IBM_EMAC_RX_COAL_TIMER);
 +#endif
  
+-	/* Clear the error status register */
+-	set_mal_dcrn(mal, MAL_ESR, esr);
 +	/* Enable the Tx/Rx Coalescing interrupt */
 +	mtdcri(SDR0, DCRN_SDR0_ICCRTX0, TX_COAL_CNT << SDR0_ICC_FTHR_SHIFT);
 +	mtdcri(SDR0, DCRN_SDR0_ICCRTX1, TX_COAL_CNT << SDR0_ICC_FTHR_SHIFT);
@@ -5160,7 +5081,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac
 +static irqreturn_t mal_serr(int irq, void *dev_instance) {
 +	struct mal_instance *mal = dev_instance;
 +	u32 esr = get_mal_dcrn(mal, MAL_ESR);
-+
+ 
 +	set_mal_dcrn(mal, MAL_ESR, esr);		/* Clear the error status register */
  	MAL_DBG(mal, "SERR %08x" NL, esr);
  
@@ -5362,7 +5283,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac
  	struct mal_instance *mal = container_of(napi, struct mal_instance, napi);
  	struct list_head *l;
  	int received = 0;
-@@ -405,20 +443,15 @@
+@@ -405,45 +443,48 @@
  
  	/* Process TX skbs */
  	list_for_each(l, &mal->poll_list) {
@@ -5387,15 +5308,35 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac
  		if (unlikely(test_bit(MAL_COMMAC_POLL_DISABLED, &mc->flags)))
  			continue;
  		n = mc->ops->poll_rx(mc->dev, budget);
-@@ -432,18 +465,16 @@
++        	//n = mc->ops->poll_rx(mc->dev, budget - received);
+ 		if (n) {
+ 			received += n;
+ 			budget -= n;
+-			if (budget <= 0)
+-				goto more_work; // XXX What if this is the last one ?
++			if (budget <= 0) goto more_work; // XXX What if this is the last one ?
++            		//if (received >= budget) return budget;
+ 		}
+ 	}
  
- 	/* We need to disable IRQs to protect from RXDE IRQ here */
- 	spin_lock_irqsave(&mal->lock, flags);
+-	/* We need to disable IRQs to protect from RXDE IRQ here */
+-	spin_lock_irqsave(&mal->lock, flags);
 -	__napi_complete(napi);
 -	mal_enable_eob_irq(mal);
-+	__napi_complete(napi);  /* There are no packets left. */
-+	mal_enable_eob_irq(mal);  /* Re-enable hypervisor interrupts. */
++	///* old code
++	spin_lock_irqsave(&mal->lock, flags); // We need to disable IRQs to protect from RXDE IRQ here
++	__napi_complete(napi);  // There are no packets left
++	mal_enable_eob_irq(mal);  // Re-enable hypervisor interrupts. 
  	spin_unlock_irqrestore(&mal->lock, flags);
++	//*/
++
++    	/* Remove __napi_complete
++	if (napi_complete_done(napi, received)) {
++		spin_lock_irqsave(&mal->lock, flags);  // We need to disable IRQs to protect from RXDE IRQ here
++		mal_enable_eob_irq(mal);
++		spin_unlock_irqrestore(&mal->lock, flags);
++	}
++    	*/
  
  	/* Check for "rotting" packet(s) */
  	list_for_each(l, &mal->poll_list) {
@@ -5410,7 +5351,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac
  			MAL_DBG2(mal, "rotting packet" NL);
  			if (!napi_reschedule(napi))
  				goto more_work;
-@@ -460,12 +491,10 @@
+@@ -460,12 +501,10 @@
  	return received;
  }
  
@@ -5424,7 +5365,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac
  	set_mal_dcrn(mal, MAL_CFG, MAL_CFG_SR);
  
  	/* Wait for reset to complete (1 system clock) */
-@@ -476,10 +505,8 @@
+@@ -476,10 +515,8 @@
  		printk(KERN_ERR "mal%d: reset timeout\n", mal->index);
  }
  
@@ -5437,7 +5378,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac
  }
  
  void *mal_dump_regs(struct mal_instance *mal, void *buf)
-@@ -516,16 +543,20 @@
+@@ -516,16 +553,20 @@
  	return regs + 1;
  }
  
@@ -5462,7 +5403,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac
  
  	mal = kzalloc(sizeof(struct mal_instance), GFP_KERNEL);
  	if (!mal)
-@@ -533,85 +564,112 @@
+@@ -533,85 +574,112 @@
  
  	mal->index = index;
  	mal->ofdev = ofdev;
@@ -5538,9 +5479,9 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac
 -	mal->txeob_irq = irq_of_parse_and_map(ofdev->dev.of_node, 0);
 -	mal->rxeob_irq = irq_of_parse_and_map(ofdev->dev.of_node, 1);
 -	mal->serr_irq = irq_of_parse_and_map(ofdev->dev.of_node, 2);
-+	mal->txeob_irq	= irq_of_parse_and_map(np, 0);
-+	mal->rxeob_irq	= irq_of_parse_and_map(np, 1);
-+	mal->serr_irq	= irq_of_parse_and_map(np, 2);
++	mal->txeob_irq = irq_of_parse_and_map(np, 0);
++	mal->rxeob_irq = irq_of_parse_and_map(np, 1);
++	mal->serr_irq  = irq_of_parse_and_map(np, 2);
  
 -	if (mal_has_feature(mal, MAL_FTR_COMMON_ERR_INT)) {
 +	if (mal_has_feature(mal, MAL_FTR_COMMON_ERR_INT))
@@ -5610,7 +5551,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac
  
  	/* Load power-on reset defaults */
  	mal_reset(mal);
-@@ -620,10 +678,8 @@
+@@ -620,10 +688,8 @@
  	cfg = (mal->version == 2) ? MAL2_CFG_DEFAULT : MAL1_CFG_DEFAULT;
  	cfg |= MAL_CFG_PLBB | MAL_CFG_OPBBL | MAL_CFG_LEA;
  
@@ -5623,7 +5564,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac
  		cfg &= ~(MAL2_CFG_RPP_10 | MAL2_CFG_WPP_10);
  
  	/* Apply configuration */
-@@ -633,25 +689,42 @@
+@@ -633,25 +699,42 @@
  	BUG_ON(mal->num_tx_chans <= 0 || mal->num_tx_chans > 32);
  	BUG_ON(mal->num_rx_chans <= 0 || mal->num_rx_chans > 32);
  
@@ -5645,7 +5586,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac
 +			printk(KERN_INFO "mal%d: failed OCM alloc, descriptor-memory = SDRAM\n", index);
 +			mal->desc_memory = MAL_DESC_MEM_SDRAM;
 +		}
-+		mal->bd_virt = dma_zalloc_coherent(dp, bd_size, &mal->bd_dma, GFP_KERNEL);
++		mal->bd_virt = dma_alloc_coherent(dp, bd_size, &mal->bd_dma, GFP_KERNEL |__GFP_ZERO);
 +	}
 +	if (mal->bd_virt == NULL) {
 +		printk(KERN_ERR "mal%d: out of memory allocating RX/TX descriptors!\n", index);
@@ -5676,7 +5617,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac
  
  	if (mal_has_feature(mal, MAL_FTR_COMMON_ERR_INT)) {
  		irqflags = IRQF_SHARED;
-@@ -664,72 +737,118 @@
+@@ -664,72 +747,118 @@
  	}
  
  	err = request_irq(mal->serr_irq, hdlr_serr, irqflags, "MAL SERR", mal);
@@ -5806,7 +5747,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac
 +static int mal_remove(struct platform_device *ofdev) {
  	struct mal_instance *mal = platform_get_drvdata(ofdev);
 +#ifdef CONFIG_IBM_EMAC_INTR_COALESCE
-+	int	i, num_phys_chans;
++	int i, num_phys_chans;
 +#endif
  
  	MAL_DBG(mal, "remove" NL);
@@ -5824,7 +5765,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac
  
  	free_irq(mal->serr_irq, mal);
  	free_irq(mal->txde_irq, mal);
-@@ -737,37 +856,34 @@
+@@ -737,37 +866,34 @@
  	free_irq(mal->rxde_irq, mal);
  	free_irq(mal->rxeob_irq, mal);
  
@@ -5883,7 +5824,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac
  	{},
  };
  
-@@ -780,12 +896,10 @@
+@@ -780,12 +906,10 @@
  	.remove = mal_remove,
  };
  
@@ -5899,9 +5840,9 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.c b/drivers/net/ethernet/ibm/emac
  	platform_driver_unregister(&mal_of_driver);
  }
 diff -Naur a/drivers/net/ethernet/ibm/emac/mal.h b/drivers/net/ethernet/ibm/emac/mal.h
---- a/drivers/net/ethernet/ibm/emac/mal.h	2017-10-05 07:44:17.000000000 +0000
-+++ b/drivers/net/ethernet/ibm/emac/mal.h	2017-07-06 16:42:52.748406700 +0000
-@@ -39,103 +39,100 @@
+--- a/drivers/net/ethernet/ibm/emac/mal.h	2019-01-09 16:16:45.000000000 +0000
++++ b/drivers/net/ethernet/ibm/emac/mal.h	2019-02-16 13:53:50.966853000 +0000
+@@ -39,104 +39,101 @@
   */
  
  /* MALx DCR registers */
@@ -5912,13 +5853,13 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.h b/drivers/net/ethernet/ibm/emac
 -#define   MAL_CFG_EOPIE		0x00000004
 -#define   MAL_CFG_LEA		0x00000002
 -#define   MAL_CFG_SD		0x00000001
-+#define	MAL_CFG				0x00
-+#define MAL_CFG_SR			0x80000000
++#define	MAL_CFG 		0x00
++#define	MAL_CFG_SR  		0x80000000
 +#define MAL_CFG_PLBB		0x00004000
 +#define MAL_CFG_OPBBL		0x00000080
 +#define MAL_CFG_EOPIE		0x00000004
-+#define MAL_CFG_LEA			0x00000002
-+#define MAL_CFG_SD			0x00000001
++#define MAL_CFG_LEA	    	0x00000002
++#define MAL_CFG_SD	    	0x00000001
  
  /* MAL V1 CFG bits */
 -#define   MAL1_CFG_PLBP_MASK	0x00c00000
@@ -5930,9 +5871,9 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.h b/drivers/net/ethernet/ibm/emac
 -#define   MAL1_CFG_DEFAULT	(MAL1_CFG_PLBP_10 | MAL1_CFG_PLBT_MASK)
 +#define MAL1_CFG_PLBP_MASK	0x00c00000
 +#define MAL1_CFG_PLBP_10	0x00800000
-+#define MAL1_CFG_GA			0x00200000
-+#define MAL1_CFG_OA			0x00100000
-+#define MAL1_CFG_PLBLE		0x00080000
++#define MAL1_CFG_GA	    	0x00200000
++#define MAL1_CFG_OA	    	0x00100000
++#define MAL1_CFG_PLBLE  	0x00080000
 +#define MAL1_CFG_PLBT_MASK	0x00078000
 +#define MAL1_CFG_DEFAULT	(MAL1_CFG_PLBP_10 | MAL1_CFG_PLBT_MASK)
  
@@ -5945,8 +5886,16 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.h b/drivers/net/ethernet/ibm/emac
 -#define   MAL2_CFG_WMBS_MASK	0x00030000
 -#define   MAL2_CFG_PLBLE	0x00008000
 -#define   MAL2_CFG_DEFAULT	(MAL2_CFG_RMBS_MASK | MAL2_CFG_WMBS_MASK | \
--				 MAL2_CFG_RPP_10 | MAL2_CFG_WPP_10)
--
++#define MAL2_CFG_RPP_MASK	0x00c00000
++#define MAL2_CFG_RPP_10	    0x00800000
++#define MAL2_CFG_RMBS_MASK	0x00300000
++#define MAL2_CFG_WPP_MASK	0x000c0000
++#define MAL2_CFG_WPP_10	    0x00080000
++#define MAL2_CFG_WMBS_MASK	0x00030000
++#define MAL2_CFG_PLBLE	    0x00008000
++#define MAL2_CFG_DEFAULT	(MAL2_CFG_RMBS_MASK | MAL2_CFG_WMBS_MASK | \
+ 				 MAL2_CFG_RPP_10 | MAL2_CFG_WPP_10)
+ 
 -#define MAL_ESR			0x01
 -#define   MAL_ESR_EVB		0x80000000
 -#define   MAL_ESR_CIDT		0x40000000
@@ -5960,35 +5909,23 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.h b/drivers/net/ethernet/ibm/emac
 -#define   MAL_ESR_OTEI		0x00000004
 -#define   MAL_ESR_OSEI		0x00000002
 -#define   MAL_ESR_PBEI		0x00000001
-+#define MAL2_CFG_RPP_MASK	0x00c00000
-+#define MAL2_CFG_RPP_10		0x00800000
-+#define MAL2_CFG_RMBS_MASK	0x00300000
-+#define MAL2_CFG_WPP_MASK	0x000c0000
-+#define MAL2_CFG_WPP_10		0x00080000
-+#define MAL2_CFG_WMBS_MASK	0x00030000
-+#define MAL2_CFG_PLBLE	0x00008000
-+#define MAL2_CFG_DEFAULT	(MAL2_CFG_RMBS_MASK | MAL2_CFG_WMBS_MASK | \
-+	MAL2_CFG_RPP_10 | MAL2_CFG_WPP_10)
-+
-+#define MAL_ESR				0x01
-+#define MAL_ESR_EVB			0x80000000
++#define MAL_ESR			    0x01
++#define MAL_ESR_EVB	    	0x80000000
 +#define MAL_ESR_CIDT		0x40000000
 +#define MAL_ESR_CID_MASK	0x3e000000
 +#define MAL_ESR_CID_SHIFT	25
-+#define MAL_ESR_DE			0x00100000
-+#define MAL_ESR_OTE			0x00040000
-+#define MAL_ESR_OSE			0x00020000
++#define MAL_ESR_DE	    	0x00100000
++#define MAL_ESR_OTE	    	0x00040000
++#define MAL_ESR_OSE	    	0x00020000
 +#define MAL_ESR_PEIN		0x00010000
-+#define MAL_ESR_DEI			0x00000010
++#define MAL_ESR_DEI	    	0x00000010
 +#define MAL_ESR_OTEI		0x00000004
 +#define MAL_ESR_OSEI		0x00000002
 +#define MAL_ESR_PBEI		0x00000001
  
  /* MAL V1 ESR bits */
--#define   MAL1_ESR_ONE		0x00080000
--#define   MAL1_ESR_ONEI		0x00000008
-+#define MAL1_ESR_ONE		0x00080000
-+#define MAL1_ESR_ONEI		0x00000008
+ #define   MAL1_ESR_ONE		0x00080000
+ #define   MAL1_ESR_ONEI		0x00000008
  
  /* MAL V2 ESR bits */
 -#define   MAL2_ESR_PTE		0x00800000
@@ -5997,6 +5934,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.h b/drivers/net/ethernet/ibm/emac
 -#define   MAL2_ESR_PTEI		0x00000080
 -#define   MAL2_ESR_PREI		0x00000040
 -#define   MAL2_ESR_PWEI		0x00000020
+-
 +#define MAL2_ESR_PTE		0x00800000
 +#define MAL2_ESR_PRE		0x00400000
 +#define MAL2_ESR_PWE		0x00200000
@@ -6004,18 +5942,16 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.h b/drivers/net/ethernet/ibm/emac
 +#define MAL2_ESR_PREI		0x00000040
 +#define MAL2_ESR_PWEI		0x00000020
  
--
--#define MAL_IER			0x02
-+#define MAL_IER				0x02
+ #define MAL_IER			0x02
  /* MAL IER bits */
 -#define   MAL_IER_DE		0x00000010
 -#define   MAL_IER_OTE		0x00000004
 -#define   MAL_IER_OE		0x00000002
 -#define   MAL_IER_PE		0x00000001
-+#define MAL_IER_DE			0x00000010
-+#define MAL_IER_OTE			0x00000004
-+#define MAL_IER_OE			0x00000002
-+#define MAL_IER_PE			0x00000001
++#define MAL_IER_DE		0x00000010
++#define MAL_IER_OTE		0x00000004
++#define MAL_IER_OE		0x00000002
++#define MAL_IER_PE		0x00000001
  
  /* PLB read/write/timeout errors */
 -#define   MAL_IER_PTE		0x00000080
@@ -6025,33 +5961,26 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.h b/drivers/net/ethernet/ibm/emac
 -#define   MAL_IER_SOC_EVENTS	(MAL_IER_PTE | MAL_IER_PRE | MAL_IER_PWE)
 -#define   MAL_IER_EVENTS	(MAL_IER_SOC_EVENTS | MAL_IER_DE | \
 -				 MAL_IER_OTE | MAL_IER_OE | MAL_IER_PE)
-+#define MAL_IER_PTE			0x00000080
-+#define MAL_IER_PRE			0x00000040
-+#define MAL_IER_PWE			0x00000020
++#define MAL_IER_PTE		0x00000080
++#define MAL_IER_PRE		0x00000040
++#define MAL_IER_PWE		0x00000020
 +
 +#define MAL_IER_SOC_EVENTS	(MAL_IER_PTE | MAL_IER_PRE | MAL_IER_PWE)
-+#define MAL_IER_EVENTS		(MAL_IER_SOC_EVENTS | MAL_IER_DE | MAL_IER_OTE | MAL_IER_OE | MAL_IER_PE)
++#define MAL_IER_EVENTS	    	(MAL_IER_SOC_EVENTS | MAL_IER_DE | MAL_IER_OTE | MAL_IER_OE | MAL_IER_PE)
  
--#define MAL_TXCASR		0x04
--#define MAL_TXCARR		0x05
-+#define MAL_TXCASR			0x04
-+#define MAL_TXCARR			0x05
+ #define MAL_TXCASR		0x04
+ #define MAL_TXCARR		0x05
  #define MAL_TXEOBISR		0x06
--#define MAL_TXDEIR		0x07
--#define MAL_RXCASR		0x10
--#define MAL_RXCARR		0x11
-+#define MAL_TXDEIR			0x07
-+#define MAL_TXBADDR			0x09
-+#define MAL_RXCASR			0x10
-+#define MAL_RXCARR			0x11
+ #define MAL_TXDEIR		0x07
++#define MAL_TXBADDR		0x09
+ #define MAL_RXCASR		0x10
+ #define MAL_RXCARR		0x11
  #define MAL_RXEOBISR		0x12
--#define MAL_RXDEIR		0x13
-+#define MAL_RXDEIR			0x13
-+#define MAL_RXBADDR			0x15
+ #define MAL_RXDEIR		0x13
++#define MAL_RXBADDR		0x15
  #define MAL_TXCTPR(n)		((n) + 0x20)
  #define MAL_RXCTPR(n)		((n) + 0x40)
--#define MAL_RCBS(n)		((n) + 0x60)
-+#define MAL_RCBS(n)			((n) + 0x60)
+ #define MAL_RCBS(n)		((n) + 0x60)
  
  /* In reality MAL can handle TX buffers up to 4095 bytes long,
 - * but this isn't a good round number :) 		 --ebs
@@ -6069,10 +5998,12 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.h b/drivers/net/ethernet/ibm/emac
  
 -static inline int mal_tx_chunks(int len)
 -{
+-	return (len + MAL_MAX_TX_SIZE - 1) / MAL_MAX_TX_SIZE;
 +static inline int mal_tx_chunks(int len) {
- 	return (len + MAL_MAX_TX_SIZE - 1) / MAL_MAX_TX_SIZE;
++    return DIV_ROUND_UP(len, MAL_MAX_TX_SIZE);
  }
  
+ #define MAL_CHAN_MASK(n)	(0x80000000 >> (n))
 @@ -155,7 +152,13 @@
  #define MAL_RX_CTRL_CM		0x2000
  #define MAL_RX_CTRL_LAST	0x1000
@@ -6087,7 +6018,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.h b/drivers/net/ethernet/ibm/emac
  #define MAL_RX_CTRL_SINGLE	(MAL_RX_CTRL_LAST | MAL_RX_CTRL_FIRST)
  #define MAL_IS_SINGLE_RX(ctrl)	(((ctrl) & MAL_RX_CTRL_SINGLE) == MAL_RX_CTRL_SINGLE)
  
-@@ -165,81 +168,174 @@
+@@ -165,17 +168,83 @@
  #define MAL_TX_CTRL_LAST	0x1000
  #define MAL_TX_CTRL_INTR	0x0400
  
@@ -6159,39 +6090,33 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.h b/drivers/net/ethernet/ibm/emac
 +
  struct mal_commac_ops {
 -	void	(*poll_tx) (void *dev);
--	int	(*poll_rx) (void *dev, int budget);
--	int	(*peek_rx) (void *dev);
--	void	(*rxde) (void *dev);
 +	void (*poll_tx) (void *dev);
-+	int	 (*poll_rx) (void *dev, int budget);
-+	int	 (*peek_rx) (void *dev);
-+	void (*rxde)	(void *dev);
+ 	int	(*poll_rx) (void *dev, int budget);
+ 	int	(*peek_rx) (void *dev);
+-	void	(*rxde) (void *dev);
++	void (*rxde) (void *dev);
  };
  
  struct mal_commac {
- 	struct mal_commac_ops	*ops;
+-	struct mal_commac_ops	*ops;
 -	void			*dev;
 -	struct list_head	poll_list;
--	long       		flags;
-+	void					*dev;
-+	struct list_head		poll_list;
-+	long       				flags;
++	struct mal_commac_ops *ops;
++	void		*dev;
++	struct list_head poll_list;
+ 	long       		flags;
  #define MAL_COMMAC_RX_STOPPED		0
  #define MAL_COMMAC_POLL_DISABLED	1
--	u32			tx_chan_mask;
--	u32			rx_chan_mask;
--	struct list_head	list;
-+	u32						tx_chan_mask;
-+	u32						rx_chan_mask;
-+	struct list_head		list;
+@@ -184,18 +253,45 @@
+ 	struct list_head	list;
  };
  
 +#ifdef CONFIG_IBM_EMAC_INTR_COALESCE
 +struct mal_coales_param { /* Configuration parameters for the coalescing function */
-+	int                     tx_count;
-+	int                     tx_time;
-+	int                     rx_count;
-+	int                     rx_time;
++	int         tx_count;
++	int         tx_time;
++	int         rx_count;
++	int         rx_time;
 +};
 +#endif
 +
@@ -6205,15 +6130,12 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.h b/drivers/net/ethernet/ibm/emac
  	int			num_rx_chans;	/* Number of RX channels */
 -	int 			txeob_irq;	/* TX End Of Buffer IRQ  */
 -	int 			rxeob_irq;	/* RX End Of Buffer IRQ  */
--	int			txde_irq;	/* TX Descriptor Error IRQ */
--	int			rxde_irq;	/* RX Descriptor Error IRQ */
--	int			serr_irq;	/* MAL System Error IRQ    */
-+	int 		txeob_irq;		/* TX End Of Buffer IRQ  */
-+	int 		rxeob_irq;		/* RX End Of Buffer IRQ  */
-+	int			txde_irq;		/* TX Descriptor Error IRQ */
-+	int			rxde_irq;		/* RX Descriptor Error IRQ */
-+	int			serr_irq;		/* MAL System Error IRQ    */
-+
++	int 		txeob_irq;	/* TX End Of Buffer IRQ  */
++	int 		rxeob_irq;	/* RX End Of Buffer IRQ  */
+ 	int			txde_irq;	/* TX Descriptor Error IRQ */
+ 	int			rxde_irq;	/* RX Descriptor Error IRQ */
+ 	int			serr_irq;	/* MAL System Error IRQ    */
+ 
 +#if defined(CONFIG_IBM_EMAC_INTR_COALESCE)
 +	int			txcoal0_irq;	/* COAL */
 +	int			txcoal1_irq;	/* COAL */
@@ -6231,14 +6153,11 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.h b/drivers/net/ethernet/ibm/emac
 +	u32     	enet_coales_iccrrx;
 +	struct timer_list mal_coal_timer;
 +#endif
++
+ 	struct list_head	poll_list;
+ 	struct napi_struct	napi;
  
--	struct list_head	poll_list;
--	struct napi_struct	napi;
-+	struct list_head poll_list;
-+	struct napi_struct napi;
- 
--	struct list_head	list;
-+	struct list_head list;
+@@ -203,73 +299,66 @@
  	u32			tx_chan_mask;
  	u32			rx_chan_mask;
  
@@ -6252,8 +6171,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.h b/drivers/net/ethernet/ibm/emac
 -	spinlock_t		lock;
 +	spinlock_t	lock;
  
--	struct net_device	dummy_dev;
-+	struct net_device dummy_dev;
+ 	struct net_device	dummy_dev;
  
  	unsigned int features;
 +#ifdef CONFIG_IBM_EMAC_INTR_COALESCE
@@ -6294,9 +6212,15 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.h b/drivers/net/ethernet/ibm/emac
 -
  	MAL_FTRS_POSSIBLE =
  #ifdef CONFIG_IBM_EMAC_MAL_CLR_ICINTSTAT
- 		MAL_FTR_CLEAR_ICINTSTAT |
-@@ -250,26 +346,19 @@
- 		0,
+-		MAL_FTR_CLEAR_ICINTSTAT |
++	MAL_FTR_CLEAR_ICINTSTAT |
+ #endif
+ #ifdef CONFIG_IBM_EMAC_MAL_COMMON_ERR
+-		MAL_FTR_COMMON_ERR_INT |
++	MAL_FTR_COMMON_ERR_INT |
+ #endif
+-		0,
++	0,
  };
  
 -static inline int mal_has_feature(struct mal_instance *dev,
@@ -6346,8 +6270,8 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/mal.h b/drivers/net/ethernet/ibm/emac
  	u32 esr;
  	u32 ier;
 diff -Naur a/drivers/net/ethernet/ibm/emac/phy.c b/drivers/net/ethernet/ibm/emac/phy.c
---- a/drivers/net/ethernet/ibm/emac/phy.c	2017-10-05 07:44:17.000000000 +0000
-+++ b/drivers/net/ethernet/ibm/emac/phy.c	2017-06-30 10:50:13.501459972 +0000
+--- a/drivers/net/ethernet/ibm/emac/phy.c	2019-01-09 16:16:45.000000000 +0000
++++ b/drivers/net/ethernet/ibm/emac/phy.c	2019-02-16 13:59:47.594123000 +0000
 @@ -24,6 +24,8 @@
  #include <linux/mii.h>
  #include <linux/ethtool.h>
@@ -6639,47 +6563,30 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/phy.c b/drivers/net/ethernet/ibm/emac
  
  		phy->pause = phy->asym_pause = 0;
  	}
-@@ -277,94 +223,109 @@
+@@ -276,7 +222,7 @@
+ }
  
  /* Generic implementation for most 10/100/1000 PHYs */
- static struct mii_phy_ops generic_phy_ops = {
--	.setup_aneg	= genmii_setup_aneg,
-+	.setup_aneg		= genmii_setup_aneg,
+-static struct mii_phy_ops generic_phy_ops = {
++static const struct mii_phy_ops generic_phy_ops = {
+ 	.setup_aneg	= genmii_setup_aneg,
  	.setup_forced	= genmii_setup_forced,
--	.poll_link	= genmii_poll_link,
--	.read_link	= genmii_read_link
-+	.poll_link		= genmii_poll_link,
-+	.read_link		= genmii_read_link
- };
- 
- static struct mii_phy_def genmii_phy_def = {
--	.phy_id		= 0x00000000,
-+	.phy_id			= 0x00000000,
- 	.phy_id_mask	= 0x00000000,
--	.name		= "Generic MII",
--	.ops		= &generic_phy_ops
-+	.name			= "Generic MII",
-+	.ops			= &generic_phy_ops
- };
- 
- /* CIS8201 */
--#define MII_CIS8201_10BTCSR	0x16
-+#define MII_CIS8201_10BTCSR		0x16
+ 	.poll_link	= genmii_poll_link,
+@@ -294,53 +240,39 @@
+ #define MII_CIS8201_10BTCSR	0x16
  #define  TENBTCSR_ECHO_DISABLE	0x2000
--#define MII_CIS8201_EPCR	0x17
+ #define MII_CIS8201_EPCR	0x17
 -#define  EPCR_MODE_MASK		0x3000
 -#define  EPCR_GMII_MODE		0x0000
 -#define  EPCR_RGMII_MODE	0x1000
 -#define  EPCR_TBI_MODE		0x2000
 -#define  EPCR_RTBI_MODE		0x3000
--#define MII_CIS8201_ACSR	0x1c
-+#define MII_CIS8201_EPCR		0x17
-+#define  EPCR_MODE_MASK			0x3000
-+#define  EPCR_GMII_MODE			0x0000
-+#define  EPCR_RGMII_MODE		0x1000
-+#define  EPCR_TBI_MODE			0x2000
-+#define  EPCR_RTBI_MODE			0x3000
-+#define MII_CIS8201_ACSR		0x1c
++#define EPCR_MODE_MASK		0x3000
++#define EPCR_GMII_MODE		0x0000
++#define EPCR_RGMII_MODE	0x1000
++#define EPCR_TBI_MODE		0x2000
++#define EPCR_RTBI_MODE		0x3000
+ #define MII_CIS8201_ACSR	0x1c
  #define  ACSR_PIN_PRIO_SELECT	0x0004
  
 -static int cis8201_init(struct mii_phy *phy)
@@ -6708,11 +6615,11 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/phy.c b/drivers/net/ethernet/ibm/emac
 -	case PHY_MODE_RGMII:
 -	default:
 -		epcr |= EPCR_RGMII_MODE;
-+		case PHY_MODE_TBI:		epcr |= EPCR_TBI_MODE; break;
-+		case PHY_MODE_RTBI:		epcr |= EPCR_RTBI_MODE;	break;
-+		case PHY_MODE_GMII:		epcr |= EPCR_GMII_MODE;	break;
-+		case PHY_MODE_RGMII:
-+		default:				epcr |= EPCR_RGMII_MODE;
++		case PHY_INTERFACE_MODE_TBI:	epcr |= EPCR_TBI_MODE; break;
++		case PHY_INTERFACE_MODE_RTBI:	epcr |= EPCR_RTBI_MODE;	break;
++		case PHY_INTERFACE_MODE_GMII:	epcr |= EPCR_GMII_MODE;	break;
++		case PHY_INTERFACE_MODE_RGMII:
++		default:			epcr |= EPCR_RGMII_MODE;
  	}
  
  	phy_write(phy, MII_CIS8201_EPCR, epcr);
@@ -6730,37 +6637,20 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/phy.c b/drivers/net/ethernet/ibm/emac
  	return 0;
  }
  
- static struct mii_phy_ops cis8201_phy_ops = {
--	.init		= cis8201_init,
--	.setup_aneg	= genmii_setup_aneg,
-+	.init			= cis8201_init,
-+	.setup_aneg		= genmii_setup_aneg,
+-static struct mii_phy_ops cis8201_phy_ops = {
++static const struct mii_phy_ops cis8201_phy_ops = {
+ 	.init		= cis8201_init,
+ 	.setup_aneg	= genmii_setup_aneg,
  	.setup_forced	= genmii_setup_forced,
--	.poll_link	= genmii_poll_link,
--	.read_link	= genmii_read_link
-+	.poll_link		= genmii_poll_link,
-+	.read_link		= genmii_read_link
- };
- 
- static struct mii_phy_def cis8201_phy_def = {
--	.phy_id		= 0x000fc410,
-+	.phy_id			= 0x000fc410,
- 	.phy_id_mask	= 0x000ffff0,
--	.name		= "CIS8201 Gigabit Ethernet",
--	.ops		= &cis8201_phy_ops
-+	.name			= "CIS8201 Gigabit Ethernet",
-+	.ops			= &cis8201_phy_ops
+@@ -356,15 +288,44 @@
  };
  
  static struct mii_phy_def bcm5248_phy_def = {
 -
--	.phy_id		= 0x0143bc00,
-+	.phy_id			= 0x0143bc00,
+ 	.phy_id		= 0x0143bc00,
  	.phy_id_mask	= 0x0ffffff0,
--	.name		= "BCM5248 10/100 SMII Ethernet",
--	.ops		= &generic_phy_ops
-+	.name			= "BCM5248 10/100 SMII Ethernet",
-+	.ops			= &generic_phy_ops
+ 	.name		= "BCM5248 10/100 SMII Ethernet",
+ 	.ops		= &generic_phy_ops
  };
 +#ifdef CONFIG_APOLLO3G
 +static int bcm54610_init(struct mii_phy *phy) {
@@ -6839,78 +6729,46 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/phy.c b/drivers/net/ethernet/ibm/emac
  	u16 reg_short;
  
  	reg_short = (u16)(phy_read(phy, 0x16));
-@@ -421,57 +374,51 @@
+@@ -420,7 +373,7 @@
+ 	return 0;
  }
  
- static struct mii_phy_ops et1011c_phy_ops = {
--	.init		= et1011c_init,
--	.setup_aneg	= genmii_setup_aneg,
-+	.init			= et1011c_init,
-+	.setup_aneg		= genmii_setup_aneg,
+-static struct mii_phy_ops et1011c_phy_ops = {
++static const struct mii_phy_ops et1011c_phy_ops = {
+ 	.init		= et1011c_init,
+ 	.setup_aneg	= genmii_setup_aneg,
  	.setup_forced	= genmii_setup_forced,
--	.poll_link	= genmii_poll_link,
--	.read_link	= genmii_read_link
-+	.poll_link		= genmii_poll_link,
-+	.read_link		= genmii_read_link
- };
- 
- static struct mii_phy_def et1011c_phy_def = {
--	.phy_id		= 0x0282f000,
-+	.phy_id			= 0x0282f000,
- 	.phy_id_mask	= 0x0fffff00,
--	.name		= "ET1011C Gigabit Ethernet",
--	.ops		= &et1011c_phy_ops
-+	.name			= "ET1011C Gigabit Ethernet",
-+	.ops			= &et1011c_phy_ops
+@@ -435,11 +388,7 @@
+ 	.ops		= &et1011c_phy_ops
  };
  
 -
 -
 -
 -
- static struct mii_phy_ops m88e1111_phy_ops = {
--	.init		= m88e1111_init,
--	.setup_aneg	= genmii_setup_aneg,
-+	.init			= m88e1111_init,
-+	.setup_aneg		= genmii_setup_aneg,
+-static struct mii_phy_ops m88e1111_phy_ops = {
++static const struct mii_phy_ops m88e1111_phy_ops = {
+ 	.init		= m88e1111_init,
+ 	.setup_aneg	= genmii_setup_aneg,
  	.setup_forced	= genmii_setup_forced,
--	.poll_link	= genmii_poll_link,
--	.read_link	= genmii_read_link
-+	.poll_link		= genmii_poll_link,
-+	.read_link		= genmii_read_link
+@@ -448,14 +397,13 @@
  };
  
  static struct mii_phy_def m88e1111_phy_def = {
 -
--	.phy_id		= 0x01410CC0,
-+	.phy_id			= 0x01410CC0,
+ 	.phy_id		= 0x01410CC0,
  	.phy_id_mask	= 0x0ffffff0,
--	.name		= "Marvell 88E1111 Ethernet",
--	.ops		= &m88e1111_phy_ops,
-+	.name			= "Marvell 88E1111 Ethernet",
-+	.ops			= &m88e1111_phy_ops,
+ 	.name		= "Marvell 88E1111 Ethernet",
+ 	.ops		= &m88e1111_phy_ops,
  };
  
- static struct mii_phy_ops m88e1112_phy_ops = {
--	.init		= m88e1112_init,
--	.setup_aneg	= genmii_setup_aneg,
-+	.init			= m88e1112_init,
-+	.setup_aneg		= genmii_setup_aneg,
+-static struct mii_phy_ops m88e1112_phy_ops = {
++static const struct mii_phy_ops m88e1112_phy_ops = {
+ 	.init		= m88e1112_init,
+ 	.setup_aneg	= genmii_setup_aneg,
  	.setup_forced	= genmii_setup_forced,
--	.poll_link	= genmii_poll_link,
--	.read_link	= genmii_read_link
-+	.poll_link		= genmii_poll_link,
-+	.read_link		= genmii_read_link
- };
- 
- static struct mii_phy_def m88e1112_phy_def = {
--	.phy_id		= 0x01410C90,
-+	.phy_id			= 0x01410C90,
- 	.phy_id_mask	= 0x0ffffff0,
--	.name		= "Marvell 88E1112 Ethernet",
--	.ops		= &m88e1112_phy_ops,
-+	.name			= "Marvell 88E1112 Ethernet",
-+	.ops			= &m88e1112_phy_ops,
+@@ -470,8 +418,7 @@
+ 	.ops		= &m88e1112_phy_ops,
  };
  
 -static int ar8035_init(struct mii_phy *phy)
@@ -6919,32 +6777,16 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/phy.c b/drivers/net/ethernet/ibm/emac
  	phy_write(phy, 0x1d, 0x5); /* Address debug register 5 */
  	phy_write(phy, 0x1e, 0x2d47); /* Value copied from u-boot */
  	phy_write(phy, 0x1d, 0xb);    /* Address hib ctrl */
-@@ -481,24 +428,27 @@
+@@ -480,7 +427,7 @@
+ 	return 0;
  }
  
- static struct mii_phy_ops ar8035_phy_ops = {
--	.init		= ar8035_init,
--	.setup_aneg	= genmii_setup_aneg,
-+	.init			= ar8035_init,
-+	.setup_aneg		= genmii_setup_aneg,
+-static struct mii_phy_ops ar8035_phy_ops = {
++static const struct mii_phy_ops ar8035_phy_ops = {
+ 	.init		= ar8035_init,
+ 	.setup_aneg	= genmii_setup_aneg,
  	.setup_forced	= genmii_setup_forced,
--	.poll_link	= genmii_poll_link,
--	.read_link	= genmii_read_link,
-+	.poll_link		= genmii_poll_link,
-+	.read_link		= genmii_read_link,
- };
- 
- static struct mii_phy_def ar8035_phy_def = {
--	.phy_id		= 0x004dd070,
-+	.phy_id			= 0x004dd070,
- 	.phy_id_mask	= 0xfffffff0,
--	.name		= "Atheros 8035 Gigabit Ethernet",
--	.ops		= &ar8035_phy_ops,
-+	.name			= "Atheros 8035 Gigabit Ethernet",
-+	.ops			= &ar8035_phy_ops,
- };
- 
- static struct mii_phy_def *mii_phy_table[] = {
+@@ -499,6 +446,9 @@
  	&et1011c_phy_def,
  	&cis8201_phy_def,
  	&bcm5248_phy_def,
@@ -7027,8 +6869,8 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/phy.c b/drivers/net/ethernet/ibm/emac
  }
  
 diff -Naur a/drivers/net/ethernet/ibm/emac/phy.h b/drivers/net/ethernet/ibm/emac/phy.h
---- a/drivers/net/ethernet/ibm/emac/phy.h	2017-10-05 07:44:17.000000000 +0000
-+++ b/drivers/net/ethernet/ibm/emac/phy.h	2017-06-30 08:09:29.546469063 +0000
+--- a/drivers/net/ethernet/ibm/emac/phy.h	2019-01-09 16:16:45.000000000 +0000
++++ b/drivers/net/ethernet/ibm/emac/phy.h	2018-10-22 14:57:34.842585000 +0000
 @@ -23,6 +23,8 @@
   * flexible than mii.c
   */
@@ -7091,17 +6933,8 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/phy.h b/drivers/net/ethernet/ibm/emac
  int emac_mii_reset_phy(struct mii_phy *phy);
  int emac_mii_reset_gpcs(struct mii_phy *phy);
 diff -Naur a/drivers/net/ethernet/ibm/emac/rgmii.c b/drivers/net/ethernet/ibm/emac/rgmii.c
---- a/drivers/net/ethernet/ibm/emac/rgmii.c	2017-10-05 07:44:17.000000000 +0000
+--- a/drivers/net/ethernet/ibm/emac/rgmii.c	2019-01-09 16:16:45.000000000 +0000
 +++ b/drivers/net/ethernet/ibm/emac/rgmii.c	2017-07-06 17:09:08.100796200 +0000
-@@ -38,7 +38,7 @@
- /* RGMIIx_FER */
- #define RGMII_FER_MASK(idx)	(0x7 << ((idx) * 4))
- #define RGMII_FER_RTBI(idx)	(0x4 << ((idx) * 4))
--#define RGMII_FER_RGMII(idx)	(0x5 << ((idx) * 4))
-+#define RGMII_FER_RGMII(idx)(0x5 << ((idx) * 4))
- #define RGMII_FER_TBI(idx)	(0x6 << ((idx) * 4))
- #define RGMII_FER_GMII(idx)	(0x7 << ((idx) * 4))
- #define RGMII_FER_MII(idx)	RGMII_FER_GMII(idx)
 @@ -50,190 +50,131 @@
  #define RGMII_SSR_1000(idx)	(0x4 << ((idx) * 8))
  
@@ -7135,11 +6968,11 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/rgmii.c b/drivers/net/ethernet/ibm/em
 -	default:
 -		BUG();
 +		case PHY_MODE_RGMII:	return "RGMII";
-+		case PHY_MODE_TBI:		return "TBI";
-+		case PHY_MODE_GMII:		return "GMII";
-+		case PHY_MODE_MII:		return "MII";
-+		case PHY_MODE_RTBI:		return "RTBI";
-+		default:				BUG();
++		case PHY_MODE_TBI:	return "TBI";
++		case PHY_MODE_GMII:	return "GMII";
++		case PHY_MODE_MII:	return "MII";
++		case PHY_MODE_RTBI:	return "RTBI";
++		default:		BUG();
  	}
  }
  
@@ -7160,11 +6993,11 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/rgmii.c b/drivers/net/ethernet/ibm/em
 -	default:
 -		BUG();
 +		case PHY_MODE_RGMII:	return RGMII_FER_RGMII(input);
-+		case PHY_MODE_TBI:		return RGMII_FER_TBI(input);
-+		case PHY_MODE_GMII:		return RGMII_FER_GMII(input);
-+		case PHY_MODE_MII:		return RGMII_FER_MII(input);
-+		case PHY_MODE_RTBI:		return RGMII_FER_RTBI(input);
-+		default:				BUG();
++		case PHY_MODE_TBI:	return RGMII_FER_TBI(input);
++		case PHY_MODE_GMII:	return RGMII_FER_GMII(input);
++		case PHY_MODE_MII:	return RGMII_FER_MII(input);
++		case PHY_MODE_RTBI:	return RGMII_FER_RTBI(input);
++		default:		BUG();
  	}
  }
  
@@ -7219,7 +7052,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/rgmii.c b/drivers/net/ethernet/ibm/em
 -	else if (speed == SPEED_10)
 -		ssr |= RGMII_SSR_10(input);
 -
-+	if (speed == SPEED_1000) 		ssr |= RGMII_SSR_1000(input);
++	if (speed == SPEED_1000) 	ssr |= RGMII_SSR_1000(input);
 +	else if (speed == SPEED_100) 	ssr |= RGMII_SSR_100(input);
 +	else if (speed == SPEED_10) 	ssr |= RGMII_SSR_10(input);
  	out_be32(&p->ssr, ssr);
@@ -7437,17 +7270,8 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/rgmii.c b/drivers/net/ethernet/ibm/em
  	platform_driver_unregister(&rgmii_driver);
  }
 diff -Naur a/drivers/net/ethernet/ibm/emac/rgmii.h b/drivers/net/ethernet/ibm/emac/rgmii.h
---- a/drivers/net/ethernet/ibm/emac/rgmii.h	2017-10-05 07:44:17.000000000 +0000
+--- a/drivers/net/ethernet/ibm/emac/rgmii.h	2019-01-09 16:16:45.000000000  +0000
 +++ b/drivers/net/ethernet/ibm/emac/rgmii.h	2017-06-25 20:27:27.380080900 +0000
-@@ -27,7 +27,7 @@
- #define __IBM_NEWEMAC_RGMII_H
- 
- /* RGMII bridge type */
--#define RGMII_STANDARD		0
-+#define RGMII_STANDARD	0
- #define RGMII_AXON		1
- 
- /* RGMII bridge */
 @@ -77,6 +77,6 @@
  # define rgmii_set_speed(x,y,z)	do { } while(0)
  # define rgmii_get_regs_len(x)	0
@@ -7458,7 +7282,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/rgmii.h b/drivers/net/ethernet/ibm/em
 -#endif /* __IBM_NEWEMAC_RGMII_H */
 +#endif	/* __IBM_NEWEMAC_RGMII_H */
 diff -Naur a/drivers/net/ethernet/ibm/emac/tah.c b/drivers/net/ethernet/ibm/emac/tah.c
---- a/drivers/net/ethernet/ibm/emac/tah.c	2017-10-05 07:44:17.000000000 +0000
+--- a/drivers/net/ethernet/ibm/emac/tah.c	2019-01-09 16:16:45.000000000 +0000
 +++ b/drivers/net/ethernet/ibm/emac/tah.c	2017-07-06 06:29:01.466070285 +0000
 @@ -24,72 +24,115 @@
  #include "emac.h"
@@ -7696,9 +7520,9 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/tah.c b/drivers/net/ethernet/ibm/emac
  	platform_driver_unregister(&tah_driver);
  }
 diff -Naur a/drivers/net/ethernet/ibm/emac/tah.h b/drivers/net/ethernet/ibm/emac/tah.h
---- a/drivers/net/ethernet/ibm/emac/tah.h	2017-10-05 07:44:17.000000000 +0000
+--- a/drivers/net/ethernet/ibm/emac/tah.h	2019-01-09 16:16:45.000000000 +0000
 +++ b/drivers/net/ethernet/ibm/emac/tah.h	2017-07-07 08:37:22.765108480 +0000
-@@ -38,23 +38,27 @@
+@@ -38,20 +38,24 @@
  
  
  /* TAH device */
@@ -7718,39 +7542,30 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/tah.h b/drivers/net/ethernet/ibm/emac
  
 -	/* number of EMACs using this TAH */
 -	int				users;
-+	u32 ssr[TAH_NO_SSR];			// Current setting for TAHx_SSRx
-+	//u32 ssr_order[TAH_NO_SSR];	// Indexes of ordered TAH_x_SSRx values, high to low
++	u32 			ssr[TAH_NO_SSR];	// Current setting for TAHx_SSRx
++	//u32 			ssr_order[TAH_NO_SSR];	// Indexes of ordered TAH_x_SSRx values, high to low
  
 -	/* OF device instance */
 -	struct platform_device		*ofdev;
-+	struct mutex			lock;	// Only one EMAC whacks us at a time
-+	int						users;	// number of EMACs using this TAH
++	struct mutex		lock;	// Only one EMAC whacks us at a time
++	int			users;	// number of EMACs using this TAH
 +	struct platform_device	*ofdev;	// OF device instance
  };
  
 -
  /* TAH engine */
--#define TAH_MR_CVR		0x80000000
--#define TAH_MR_SR		0x40000000
-+#define TAH_MR_CVR			0x80000000
-+#define TAH_MR_SR			0x40000000
- #define TAH_MR_ST_256		0x01000000
- #define TAH_MR_ST_512		0x02000000
- #define TAH_MR_ST_768		0x03000000
-@@ -67,8 +71,10 @@
- #define TAH_MR_TFS_6KB		0x00600000
- #define TAH_MR_TFS_8KB		0x00800000
+ #define TAH_MR_CVR		0x80000000
+ #define TAH_MR_SR		0x40000000
+@@ -69,6 +73,8 @@
  #define TAH_MR_TFS_10KB		0x00a00000
--#define TAH_MR_DTFP		0x00100000
--#define TAH_MR_DIG		0x00080000
-+#define TAH_MR_DTFP			0x00100000
-+#define TAH_MR_DIG			0x00080000
+ #define TAH_MR_DTFP		0x00100000
+ #define TAH_MR_DIG		0x00080000
 +#define TAH_SSR_2_SS(val)	(((val) >> 17) & 0x1fff)
 +#define SS_2_TAH_SSR(s)		(((s) & 0x1fff) << 17) 		// s is number of half words
  
  #ifdef CONFIG_IBM_EMAC_TAH
  
-@@ -79,17 +85,19 @@
+@@ -79,6 +85,8 @@
  void tah_reset(struct platform_device *ofdev);
  int tah_get_regs_len(struct platform_device *ofdev);
  void *tah_dump_regs(struct platform_device *ofdev, void *buf);
@@ -7759,16 +7574,7 @@ diff -Naur a/drivers/net/ethernet/ibm/emac/tah.h b/drivers/net/ethernet/ibm/emac
  
  #else
  
--# define tah_init()		0
--# define tah_exit()		do { } while(0)
--# define tah_attach(x,y)	(-ENXIO)
--# define tah_detach(x,y)	do { } while(0)
--# define tah_reset(x)		do { } while(0)
-+# define tah_init()				0
-+# define tah_exit()				do {} while(0)
-+# define tah_attach(x,y)		(-ENXIO)
-+# define tah_detach(x,y)		do {} while(0)
-+# define tah_reset(x)			do {} while(0)
+@@ -90,6 +98,6 @@
  # define tah_get_regs_len(x)	0
  # define tah_dump_regs(x,buf)	(buf)
  

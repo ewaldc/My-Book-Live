@@ -43,9 +43,9 @@
  obj-$(CONFIG_AHCI_DA850)	+= ahci_da850.o libahci.o libahci_platform.o
  obj-$(CONFIG_AHCI_IMX)		+= ahci_imx.o libahci.o libahci_platform.o
 
---- /dev/null	2017-06-21 20:25:20.252000000 +0000
-+++ b/drivers/ata/sata_dwc_ncq.h	2017-06-23 06:48:25.699279833 +0000
-@@ -0,0 +1,684 @@
+--- /dev/null	2019-02-15 08:22:25.095202567 +0100
++++ b/drivers/ata/sata_dwc_ncq.h	2019-02-18 13:59:35.945532806 +0000
+@@ -0,0 +1,685 @@
 +#include <linux/version.h>
 +#include <linux/kernel.h>
 +#include <linux/module.h>
@@ -81,6 +81,7 @@
 +#define dwc_printk_vdbg(format, arg...) printk(KERN_INFO format, ##arg)
 +#define print_dma_registers_vdbg(x) 	print_dma_registers(x)
 +#define print_dma_config_vdbg(x,y,z) 	print_dma_config(x,y,z)
++static const char* sata_reg2txt(unsigned int id);
 +#else
 +#define dwc_dev_vdbg(dev, format, arg...)
 +#define dwc_port_vdbg(ap, format, arg...)
@@ -512,7 +513,7 @@
 +static void dma_dwc_terminate_dma(struct ata_port *ap, int dma_ch);
 +static __always_inline void sata_dwc_enable_interrupts(struct sata_dwc_regs __iomem *regs);
 +static void sata_dwc_init_port (struct ata_port *ap);
-+static const char* sata_reg2txt(unsigned int id);
++
 +u8 sata_dwc_check_status(struct ata_port *ap);
 +#define SATA_DWC_CHECK_STATUS(ap) (u8)ioread8(ap->ioaddr.status_addr)
 +#define SATA_DWC_IRQ_CLEAR(bmdma_addr) iowrite8(ioread8(bmdma_addr), bmdma_addr)
@@ -729,10 +730,10 @@
 +	if (items >= 4)		return 1;
 +	return 0;
 +}
-+*/
---- /dev/null	2017-06-21 20:25:20.252000000 +0000
++*/--- /dev/null	2017-06-21 20:25:20.252000000 +0000
+--- /dev/null	2019-02-15 08:22:25.095202567 +0000
 +++ b/drivers/ata/sata_dwc_ncq.c	2017-06-19 13:14:06.456871708 +0000
-@@ -0,0 +1,1595 @@
+@@ -0,0 +1,1598 @@
 +/* drivers/ata/sata_dwc.c
 + * Synopsys DesignWare Cores (DWC) SATA host driver
 + * Author: Mark Miesfeld <mmiesfeld@amcc.com>
@@ -749,6 +750,7 @@
 + * Free Software Foundation;  either version 2 of the  License, or (at your
 + * option) any later version. */
 +
++#define SIGNAL_HHD_LED
 +//#define SATA_DWC_NCQ
 +//#define CONFIG_SATA_DWC_VDEBUG
 +#undef CONFIG_SATA_DWC_DEBUG
@@ -925,7 +927,7 @@
 +
 +#if defined(CONFIG_APM821xx)
 +			if (dir == DMA_FROM_DEVICE) {
-+				static const u32 const ctl[2] = { 
++				static const u32 ctl[2] = { 
 +					DWC_DEFAULT_CTLLO| DWC_CTLL_SRC_FIX| DWC_CTLL_DST_INC| DWC_CTLL_FC_P2M| // DMA Channel 0
 +					DWC_CTLL_SMS(1)| DWC_CTLL_DMS(0),	// Src: Master2, Dest: S1 Master1
 +					DWC_DEFAULT_CTLLO| DWC_CTLL_SRC_FIX| DWC_CTLL_DST_INC| DWC_CTLL_FC_P2M| // DMA Channel 1
@@ -935,7 +937,7 @@
 +				lli[idx].sar = cpu_to_le32((u32)dmadr);
 +				lli[idx].ctl.low = cpu_to_le32(ctl[dma_ch]);
 +			} else {	// DMA_TO_DEVICE
-+				static const u32 const ctl[2] = { 
++				static const u32 ctl[2] = { 
 +					DWC_DEFAULT_CTLLO| DWC_CTLL_DST_FIX| DWC_CTLL_SRC_INC| DWC_CTLL_FC_P2P|	// DMA Channel 0
 +					DWC_CTLL_SMS(0)| DWC_CTLL_DMS(1),	// Src: S1, Dest: M2	
 +					DWC_DEFAULT_CTLLO| DWC_CTLL_DST_FIX| DWC_CTLL_SRC_INC| DWC_CTLL_FC_P2P|	// DMA Channel 1
@@ -1037,7 +1039,7 @@
 +static __always_inline void dma_xfer_setup(int dma_ch, dma_addr_t dma_lli) {
 +	register struct dmaChanRegs __iomem *reg = &(sata_dma_regs->chan_regs[dma_ch]);
 +	// PROTCTL=3 indicates a non-cached (0), buffered (1), privileged data access (1)
-+	const int const cfg[] = {DWC_CFGH_SRC_PER(0)| DWC_CFGH_DST_PER(0)| DWC_CFGH_PROTCTL(3)| DWC_CFGH_FCMODE, 
++	const int cfg[] = {DWC_CFGH_SRC_PER(0)| DWC_CFGH_DST_PER(0)| DWC_CFGH_PROTCTL(3)| DWC_CFGH_FCMODE, 
 +						DWC_CFGH_SRC_PER(1)| DWC_CFGH_DST_PER(1)| DWC_CFGH_PROTCTL(3)| DWC_CFGH_FCMODE};
 +	//const int const cfg[] = {DWC_CFGH_SRC_PER(0)| DWC_CFGH_DST_PER(0)| DWC_CFGH_PROTCTL(3)| DWC_CFGH_FIFO_MODE, 
 +	//DWC_CFGH_SRC_PER(1)| DWC_CFGH_DST_PER(1)| DWC_CFGH_PROTCTL(3)| DWC_CFGH_FIFO_MODE};
@@ -1414,9 +1416,8 @@
 +	struct sata_dwc_device_port *hsdevp = HSDEVP_FROM_AP(ap);
 +	struct sata_dwc_device *hsdev = HSDEV_FROM_HSDEVP(hsdevp);
 +	u8 status = 0; //, tag = qc->tag;
-+	int num_lli, dma_pending = hsdevp->dma_pending[tag], i = 0;
++	int dma_pending = hsdevp->dma_pending[tag], i = 0;
 +	u32 serror, mask = 0x0;
-+	struct lli *llit;
 +
 +	dwc_port_dbg(ap, "%s: Check status=%s tag=%d\n", __func__, check_status?"yes":"no", tag);
 +	if (unlikely(dma_pending == SATA_DWC_DMA_PENDING_TX))
@@ -1456,9 +1457,12 @@
 +
 +	/* Clear lli structure */
 +	// DIFF nothing cleared in 460ex
-+	llit = hsdevp->llit[tag];
-+	num_lli = hsdevp->num_lli[tag];
-+	for(i=0; i < num_lli; i++) llit[i].llp = 0;
++    /*	{
++		struct lli *llit = hsdevp->llit[tag];
++		int num_lli = hsdevp->num_lli[tag];
++		for(i=0; i < num_lli; i++) llit[i].llp = 0;
++	}
++    */	
 +	hsdevp->num_lli[tag] = 0;
 +
 +	dwc_port_vdbg(ap, "%s - sactive_queued=0x%08x, sactive_issued=0x%08x\n",__func__, hsdevp->sactive_queued, hsdevp->sactive_issued);
@@ -1490,9 +1494,9 @@
 +	/* Check for error interrupt */
 +	if (unlikely(intpr & SATA_DWC_INTPR_ERR)) {
 +		sata_dwc_error_intr(ap, hsdev, intpr);
-+#if defined(CONFIG_APOLLO3G) //&& defined(DWC_DEBUG)
++#if defined(CONFIG_APOLLO3G) && defined(SIGNAL_HHD_LED)
 +//	signal_hdd_led(0 /*off blink*/, 1 /* _3G_LED_RED, red color*/);
-+	signal_hdd_led(_3G_BLINK_NO, _3G_LED_RED);
++	    signal_hdd_led(_3G_BLINK_NO, _3G_LED_RED);
 +#endif
 +		goto done_irqrestore;
 +	}
@@ -1643,7 +1647,7 @@
 +
 +done_irqrestore:
 +	spin_unlock_irqrestore(&host->lock, flags);
-+#if defined(CONFIG_APOLLO3G) //&& defined(DWC_DEBUG)
++#if defined(CONFIG_APOLLO3G) && defined(SIGNAL_HHD_LED)
 +//	signal_hdd_led(0 /*off blink*/, -1 /* no color */);
 +	signal_hdd_led(_3G_BLINK_NO, _3G_LED_OFF /* no color */);
 +#endif
@@ -1863,7 +1867,7 @@
 +	struct ata_port *ap = qc->ap;
 +	register struct sata_dwc_device_port *hsdevp = HSDEVP_FROM_AP(ap);
 +	struct sata_dwc_device *hsdev = HSDEV_FROM_HSDEVP(hsdevp);
-+	u32 statusIntr, reg, ch_en, dma_en_ch, __iomem *dm = &(hsdev->sata_dwc_regs->dmacr);
++	u32 reg, ch_en, dma_en_ch, __iomem *dm = &(hsdev->sata_dwc_regs->dmacr);  // statusIntr
 +	int dma_chan, idx = 0; //, tag = qc->tag;
 +
 +	dwc_port_dbg(ap, "%s: tag=%d qc->tag=%d link.active_tag=0x%08x cmd:%s dma_dir:%s link.sactive=0x%08x dma_chan_en=%x\n", 
@@ -1925,7 +1929,7 @@
 +	out_le32(IOMEM(dm), ch_en | dma_en_ch);	// Enable the channel
 +
 +
-+#if defined(CONFIG_APOLLO3G) //&& defined(DWC_DEBUG)
++#if defined(CONFIG_APOLLO3G) && defined(SIGNAL_HHD_LED)
 +//	signal_hdd_led(1 /*blink=yes*/, 2 /* _3G_LED_GREEN */);
 +	signal_hdd_led(_3G_BLINK_YES, _3G_LED_GREEN);
 +#endif
@@ -2108,9 +2112,9 @@
 +	ATA_NCQ_SHT(DRV_NAME),
 +	//.sg_tablesize       = LIBATA_MAX_PRD,
 +#ifdef SATA_DWC_NCQ
-+	.can_queue 			= ATA_MAX_QUEUE, 	// NCQ
++	.can_queue 		= ATA_MAX_QUEUE, 	// NCQ
 +#else
-+	.can_queue 			= ATA_DEF_QUEUE,	// No NCQ --> max queue depth=1
++	.can_queue 		= ATA_DEF_QUEUE,	// No NCQ --> max queue depth=1
 +#endif
 +	.dma_boundary 		= ATA_DMA_BOUNDARY, //0x1fff, // 
 +};
@@ -2328,3 +2332,4 @@
 +MODULE_AUTHOR("Mark Miesfeld <mmiesfeld@amcc.com>");
 +MODULE_DESCRIPTION("DesignWare Cores SATA controller driver");
 +MODULE_VERSION(DRV_VERSION);
+
