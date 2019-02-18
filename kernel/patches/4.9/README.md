@@ -10,9 +10,10 @@ Following versions have been validated as "excellent":
 * 4.9.99
 * 4.9.119
 * 4.9.135
+* 4.9.149
 
 Pre-4.9.31 versions are to be avoided for stability reasons. Versions post 4.9.135 are most likely fine.
-Current version under test: 4.9.149
+Last version validated: 4.9.149
 
 ## What's included ##
 The latest version of the patches include:
@@ -57,7 +58,7 @@ Download [patches](https://github.com/ewaldc/My-Book-Live/blob/master/kernel/pat
 ```  
 for i in $(ls patches/[0-9]*)
 do
-  echo "#### $i ####"
+  echo "#### $i ####"  
   patch -p 1 -b -i $i
 done
 ```
@@ -92,16 +93,12 @@ Reboot, make sure your netconsole windows are ready and ... good luck:<br>
 `systemctl reboot`
 
 
-
-
-
-
 ## Kernel 4.9.x performance ##
 With a 4.9.x customer kernel, standard 4K block size ext4 file system, Debian 8.11, page size of 64K, network MTU size of 4088, one can expect:
-* Sequential disk reads of 170MB/s (dd if=tst.dd of=/dev/null bs=1M count=1K)
-* Sequential disk writes of 100MB/s (dd if=/dev/zero of=tst.dd  bs=1M count=1K)
-* Samba read speed of 116 MB/s (1GB file read, Windows 10 64-bit)
-* Samba write speed of 85 MB/s (1GB file write, Windows 10 64-bit)
+* Sequential disk reads of 160MB/s (dd if=tst.dd of=/dev/null bs=1M count=1K)
+* Sequential disk writes of 140MB/s (dd if=/dev/zero of=tst.dd  bs=1M count=1K)
+* Samba read speed of 110 MB/s (1GB file read, Windows 10 64-bit)
+* Samba write speed of 75 MB/s (1GB file write, Windows 10 64-bit)
 * over 400 days of uptime as measured on a My Book Live NAS used in a muti-user production environment
 
 ## Supportability ##
