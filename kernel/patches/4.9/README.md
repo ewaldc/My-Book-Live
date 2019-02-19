@@ -28,6 +28,8 @@ The latest version of the patches include:
 * netconsole support patch
 * Linux Skbuff performance tuning
 
+In the case one of the networking pacthes would fail, I have provided a 7z archive of the patched files in drivers/net/ethernet/ibm/emac
+
 ## Building the kernel ##
 Install all the tools required for kernel building and creation of the u-boot bootloader entrypoint.<br>
 `apt-get install ca-certificates build-essential uboot-mkimage ncurses-dev unzip`
