@@ -82,7 +82,7 @@ saveenv
 run nc
 ```
 
-Define linux kernel boot arguments, including support for TFTP bootin and kernel/u-boot netconsole. Remove ipv6.disable=1 if you want ipv6. There is also a "debugargs" if you want to enable more kernel debug info.
+Define linux kernel boot arguments, including support for TFTP booting and kernel/u-boot netconsole. Remove ipv6.disable=1 if you want ipv6. There is also a "debugargs" if you want to enable more kernel debug info.
 
 ```
 setenv bootargs 'root=/dev/sda2 earlycon earlyprintk rw rootfstype=ext4 rootflags=data=ordered ipv6.disable=1'
