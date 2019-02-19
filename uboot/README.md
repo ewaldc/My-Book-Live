@@ -33,8 +33,7 @@ generate with
 ```
 ./mkBootSrc.sh boot_recovery_netconsole
 cp boot_recovery_netconsole.scr boot.scr
-cp /boot/
-/dev/mtd0 0x1f000 0x1000 0x1000 1 
+cp boot.scr /boot
 EOF
 ```
 
@@ -79,16 +78,17 @@ saveenv
 run nc
 ```
 
-Define linux kernel boot arguments, including kernel netconsole ports. Remove ipv6.disable=1 if you want ipv6. There is also a "debugargs" if you want to enable more kernel debug info.
+Define linux kernel boot arguments, including support for TFTP bootin and kernel/u-boot netconsole. Remove ipv6.disable=1 if you want ipv6. There is also a "debugargs" if you want to enable more kernel debug info.
 
 ```
 setenv bootargs 'root=/dev/sda2 earlycon earlyprintk rw rootfstype=ext4 rootflags=data=ordered ipv6.disable=1'
 setenv debugargs 'setenv bootargs debug rootdelay=5 panic=10 debug ignore_loglevel log_buf_len=1M ${bootargs}'
 setenv bootargs_lan 'setenv bootargs netconsole=6663@${ipaddr}/,6664@${ncIPLan}/${ncMacLan} ${bootargs}'
 setenv bootargs_wlan 'setenv bootargs netconsole=6663@${ipaddr}/,6664@${ncIPWLan}/${ncMacWLan} ${bootargs}'
-setenv load_sata1 'sata init; ext2load sata 1:1 ${kernel_addr_r} /boot/uImage; ext2load sata 1:1 ${fdt_addr_r} /boot/apollo3g.dtb'
-setenv load_sata2 'sata init; ext2load sata 1:1 ${kernel_addr_r} /boot/uImage.safe; ext2load sata 1:1 ${fdt_addr_r} /boot/apollo3g.safe.dtb'
-setenv boot_sata 'run bootargs_lan addtty; bootm ${kernel_addr_r} - ${fdt_addr_r}'
+setenv load_sata 'sata init; ext2load sata 1:1 ${kernel_addr_r} /boot/uImage; ext2load sata 1:1 ${fdt_addr_r} /boot/apollo3g.dtb'
+setenv load_sata_rcvr 'sata init; ext2load sata 1:1 ${kernel_addr_r} /boot/uImage.safe; ext2load sata 1:1 ${fdt_addr_r} /boot/apollo3g.safe.dtb'
+setenv load_tftp 'tftp ${kernel_addr_r} ${bootfile}; tftp ${fdt_addr_r} ${fdt_file}'
+setenv boot_kernel 'run bootargs_lan addtty; bootm ${kernel_addr_r} - ${fdt_addr_r}'
 ```
 
 Print all u-boot variables (mostly for debugging):
@@ -100,6 +100,21 @@ If _boot_count_ == 2 then load recovery kernel, else load default kernel:
 if itest ${boot_count} == 1; then echo "=== Loading Default Kernel ==="; run load_sata1; else echo "=== Loading Recovery Kernel ==="; run load_sata2; fi
 run boot_sata
 ```
+
+## TFTP Boot ##
+
+Network booting requires `initramfs` to be included in the kernel. Please read the section on [initramfs](https://github.com/ewaldc/My-Book-Live/tree/master/kernel/initramfs).
+
+customize as above and generate with
+```
+./mkBootSrc.sh boot_tftp_recovery_netconsole
+cp boot_tftp_recovery_netconsole.scr boot.scr
+cp boot.scr /boot
+EOF
+```
+
+On the TFTP-server, create a folder called `apollo3g` and copy `uImage` and `appolo3g.dtb`.
+
 
 ## Reading and writing u-boot environment flash from Debian Jessie ##
 How to avoid opening the My Book Live shell in case a boot failure:

@@ -13,6 +13,7 @@ The compressed tar [__image__](https://drive.google.com/open?id=1eCr4pyYLKAHId2Q
 - NFS 4.x enabled
 - 20+ Debian patches for powerpc not included in upstream Debian
 - u-boot tools
+- NetConsole enabled by default
 
 ## How to install with ext2/ext3? ##
 
@@ -85,4 +86,4 @@ Advantages of using an ext4-only configuration include:
 
 ## Installing your own, clean Debian 8 (Jessie) ##
 
-Martin Höfling has written a superb blog on this topic.  There is absolutely nothing I can add to improve on his very clear outline posted [here](https://www.schwabenlan.de/en/post/2015/04/clean-debian-install-on-mybook-live-nas/)
+Martin Höfling was written a superb blog on this topic.  There is absolutely nothing I can add to improve on his very clear outline posted [here](https://www.schwabenlan.de/en/post/2015/04/clean-debian-install-on-mybook-live-nas/)
