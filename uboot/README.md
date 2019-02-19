@@ -117,7 +117,7 @@ cp boot.scr /boot
 EOF
 ```
 
-On the TFTP-server, create a folder called `apollo3g` and copy `uImage` and `appolo3g.dtb`.
+On the TFTP-server, create a folder called `apollo3g` and copy `uImage` and `apollo3g.dtb` and/or `apollo3g_dou.dtb` to this directory.
 
 
 ## Reading and writing u-boot environment flash from Debian Jessie ##
