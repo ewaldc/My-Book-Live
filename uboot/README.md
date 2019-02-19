@@ -152,7 +152,13 @@ fw_setenv boot_count 0
 ```
 
 
-## Netcat for windows ##
+## Netcat for Linux and Windows ##
+
+Netcat is one of the easiest ways to visualize both uboot consoles (ports 6664 an 6666).
+Netcat on Linux is standard (nc command).
+For Windows, I have provided a portable version.
+
 See [NetCatWindows.z](https://github.com/ewaldc/My-Book-Live/blob/master/uboot/NetCatWindows.7z)
 
-Start two nc windows: `netconsole.bat` and `uboot_neconsole.bat`
+Start two nc windows: `netconsole.bat` and `uboot_neconsole.bat`.
+These Windows batch files also provide hints of how to run this on Linux. 
