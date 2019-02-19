@@ -10,21 +10,25 @@ The WD MBL netconsole implementation requires the following:
 
 DO NOT TEST THIS WITHOUT ABILITY TO TAKE YOUR DRIVE OUT AND HOOK TO A LINUX SYSTEM
 
-## What is "double" netconsole ? ##
+## What is "double" netconsole and why use it? ##
 Double netconsole allows you to both
-- view (or, on Linux, interact with) the u-boot console
+- view (or, on Linux and Windows, interact with) the u-boot console
 - view (or, on Linux, interact with) the systems console
 
 In this way one can view boot errors, kernel boot errors as well as console messages. 
+The biggest advantages of double netconsole are:
+- no more need to solder a UART (using non standard pin header) and risk damaging your MBL
+- no more need to open up your MBL (which is a nerve-racking exercise for many)
+- no need for (messy) cables
+- ability to monitor boot and interact with MBL u-boot remotely
 
 ## Building a kernel with netconsole support ##
-On WD MBL platforms this requires both a patch as well as enabling netconfig in the kernel.
-Read [here](https://github.com/ewaldc/My-Book-Live/tree/master/kernel) to build your own My Book Live kernel.
+On WD MBL platforms this requires both a patch as well as enabling netconsol in the kernel.
+Read [here](https://github.com/ewaldc/My-Book-Live/tree/master/kernel) to build your own My Book Live kernel, optionally via cross-compilation.
 
-Alternatively, download a precompiled, netconsole-enabled kernel [here](https://github.com/ewaldc/My-Book-Live/tree/master/kernel)
+Alternatively, __choose the easy route__ and download a precompiled, netconsole-enabled kernel [here](https://github.com/ewaldc/My-Book-Live/tree/master/kernel)
 
 
-##
 ## Building u-boot boot file using netconsole ##
 
 u-boot is looking for a boot file called `/boot/boot.scr`
