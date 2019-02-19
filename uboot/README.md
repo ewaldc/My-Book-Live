@@ -23,7 +23,7 @@ The biggest advantages of double netconsole are:
 - ability to monitor boot and interact with MBL u-boot remotely
 
 ## Building a kernel with netconsole support ##
-On WD MBL platforms this requires both a patch as well as enabling netconsol in the kernel.
+On WD MBL platforms this requires both a patch as well as enabling netconsole in the kernel.
 Read [here](https://github.com/ewaldc/My-Book-Live/tree/master/kernel) to build your own My Book Live kernel, optionally via cross-compilation.
 
 Alternatively, __choose the easy route__ and download a precompiled, netconsole-enabled kernel [here](https://github.com/ewaldc/My-Book-Live/tree/master/kernel)
