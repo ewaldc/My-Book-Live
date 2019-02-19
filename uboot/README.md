@@ -51,7 +51,7 @@ mkimage -?
 apt install u-boot-tools
 ```
 
-Then create your boot file using the u-boot template file [boot_recovery_netconsole.txt](https://github.com/ewaldc/My-Book-Live/blob/master/uboot/boot_recovery_netconsole.txt) supports two netconsole windows and two network cards. Feel free to simplify.
+Then create your boot file by customizing the u-boot template file [boot_recovery_netconsole.txt](https://github.com/ewaldc/My-Book-Live/blob/master/uboot/boot_recovery_netconsole.txt) which supports two netconsole windows and two network cards. Feel free to simplify.
 
 First redirect u-boot output and input to 'nc' (default port 6666 used):
 
