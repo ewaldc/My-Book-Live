@@ -1,7 +1,7 @@
 # Installing My-Book-Live pre-compiled kernels
 
 ## Before you install a different kernel ##
-First, read up on how to enable a recovery kernel [here](https://github.com/ewaldc/My-Book-Live/tree/master/uboot). A safe or recovery kernel allows for fail-back to a known good kernel in case something goes wrong. 
+First, read up on how to enable a recovery kernel __[here](https://github.com/ewaldc/My-Book-Live/tree/master/uboot)__. A safe or recovery kernel allows for fail-back to a known, good kernel in case something goes wrong. 
 
 ## Which kernel to take ? ##
 
@@ -9,7 +9,7 @@ All kernels listed below here have survived a 96-hours torture test.  Other kern
 The only kernel that can be used with original WD software is 2.6.32.70.
 
 ## Validated kernels for use with OEM/original firmware ##
-The only tested pre-compiled kernel which is supported by Debian Lenny is 2.6.32.70.
+The only tested, pre-compiled kernel which is supported by Debian Lenny as included with the original firmware is 2.6.32.70.<br>
 Install as follows (for MBL):
 ```
 cd /
