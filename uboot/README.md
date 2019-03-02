@@ -1,4 +1,29 @@
-# My-Book-Live netconsole
+# My-Book-Live netconsole and safe/recovery kernels
+
+When developing and/or installing kernels for MBL, it's good to be able to count on 4 functionalities:
+- ability to fall back on a working kernel and binary/compiled device tree file (apollo3g*.dtb) when a development kernel fails to boot or is so slow that there is no chance to restore a working kernel
+- ability to interact with uboot console
+- ability to watch kernel boot log (dmesg) in real time
+- ability to boot from a network device (TFTP) in case booting of your drive is not longer working (and you don't want to open up your MBL)
+
+This section explains how you can achieve these 4 capabilities.
+
+## Introduction to u-boot environment variables and boot file (/boot/boot.scr) ##
+Read [here](https://www.denx.de/wiki/U-Boot) to understand what u-boot does and how it works in details.
+Basically, our MBL hardware has a 2012 version of u-boot flashed onto NAND flash. When you power on the MBL, the board boots into the u-boot boot loader. From there, u-boot has a number of variables in persistent flash memory that guides it to boot either original or custom firmware.  Those variables can be set/modified by interacting with the u-boot console using the `setenv` command and made persistant by using `savenv`. Alternatively, it's also possible to access the persistant storage of u-boot variables from a running Debian Linux image (see below).</br>  Some variables:</br>
+- __ipaddr__: the IP address of your WBL NAS when booting into u-boot boot loader
+- __serverip__: the default IP address of the BOOTP/TFTP server (172.25.102.35)
+- __hostname__: the default hostname (apollo3g)
+- __bootargs__: the default boot argumnets passed on to the kernel
+- __load_boot_file_1__: the default boot file /boot/boot.scr
+
+Below you will information on how to customize these variables and control the way your boots by modifying the _/boot/boot.scr_ file
+
+
+## Introduction to safe/recovery kernels ##
+
+It has happened to me many times: a newly build kernel does not boot! Or, hundreds of debug messages are flooding the screen and make it impossible to restore a proper config. A safe/recovery kernel allows to simply pull the plug (or wait for u-boot watch-dog to triger a restart) and have u-boot boot a safe/recovery kernel.  The trick is to keep a _boot_count_ u-boot variable which is incremented at each boot but reset by /etc/rc.local at successful boot of the new kernel.   
+
 
 ## Introduction to netconsole ##
 First read about netconsole here: https://www.kernel.org/doc/Documentation/networking/netconsole.txt
