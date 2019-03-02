@@ -1,12 +1,9 @@
 # My-Book-Live (MBL) customization
 Kernel patches and Debian release for Western Digital My Book Live.</br>
-__NOTE__: these customizations will void your warranty and are delivered on best-effort only
-__NOTE__: while the posted methods allow you to fully customize a MBL without ever opening it, you need to keep in mind that there might be a failure which requires you to ultimately open up the shell. 
-__NOTE__: none of this work is tested on a My Book Live DUO for the simple reason that we don't own one. That said it, community members have successfully deployed on MBL Duo.
+__NOTE__: these customizations will void your warranty and are delivered on best-effort only</br>
+__NOTE__: while the posted methods allow you to fully customize a MBL without ever opening it, you need to keep in mind that there might be a failure which requires you to ultimately open up the shell.</br> 
+__NOTE__: none of this work is tested on a My Book Live DUO for the simple reason that we don't own one. That said it, community members have successfully deployed on MBL Duo.</br>
   
-Documentation is posted within each section.
-
-
 ## Why customize ? ##
 
 - My disk died: in this scenario, you may have to open up your MBL if your warranty is void and you will be exposed to the "complexity" of Linux commands/shell scripts, formatting, u-boot, etc.   It's a good time to explore the possibilities. 
@@ -25,6 +22,8 @@ Documentation is posted within each section.
 * __kernel__: Kernel patches, pre-compiled kernels and device tree structure
 * __samba__ : Optimal perfomance with Samba using smaple config files
 * __uboot__ : Netconsole support, u-boot boot files, TFTP boot and ways to safely boot My Book Live
+
+Documentation is posted within each section.
 
 ## Latest kernel support ##
 Kernel 4.9.149, released Wed, 9 Jan 2019
