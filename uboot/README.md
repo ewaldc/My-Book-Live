@@ -17,12 +17,12 @@ Basically, our MBL hardware has a 2012 version of u-boot flashed onto NAND flash
 - __bootargs__: the default boot arguments passed on to the kernel
 - __load_boot_file_1__: the default boot file /boot/boot.scr
 
-Below you will information on how to customize these variables and control the way your boots by modifying the _/boot/boot.scr_ file
+Below you will information on how to customize these variables and control the way your system boots by modifying the _/boot/boot.scr_ file
 
 
 ## Introduction to safe/recovery kernels ##
 
-It has happened to me many times: a newly build kernel does not boot! Or, hundreds of debug messages are flooding the screen and make it impossible to restore a proper config. A safe/recovery kernel allows to simply pull the plug (or wait for u-boot watch-dog to triger a restart) and have u-boot boot a safe/recovery kernel.  The trick is to keep a _boot_count_ u-boot variable which is incremented at each boot but reset by /etc/rc.local at successful boot of the new kernel.   
+It has happened to me many times: a newly build kernel does not boot! Or, hundreds of debug messages are flooding the screen and make it impossible to restore a proper config. A safe/recovery kernel allows to simply pull the plug (or wait for u-boot watch-dog to trigger a restart) and have u-boot boot a safe/recovery kernel.  The trick is to keep a _`boot_count`_ u-boot variable which is incremented at each boot but reset by `/etc/rc.local` at successful boot of the new kernel.   
 
 
 ## Introduction to netconsole ##
