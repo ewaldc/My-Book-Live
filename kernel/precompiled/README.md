@@ -36,7 +36,7 @@ All posted kernels are compressed tar archives with [7zip](https://www.7-zip.org
 * /boot/uImage_4.9.xx: compiled/compressed kernel
 * /lib/modules/4.9.xx: compiled kernel modules
 
-First, __make sure you have a backup__ of your current `/boot/apollo3g.dtb' and kernel `/boot/uImage`.<br>
+First, __make sure you have a backup__ of your current `/boot/apollo3g.dtb` and kernel `/boot/uImage`.<br>
 Or, better, enable recovery kernels and move your working kernel and dtb file to `/boot/uImage.safe` and `/boot/apollo3g.safe.dtb` (or `/boot/apollo3g_duo.safe.dtb` for MBL DUO).
 Copy the uncompressed tar file to `/tmp` of My Book Live, extract the archive, enable the new kernel and reboot:<br>
 ```
