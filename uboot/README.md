@@ -9,12 +9,12 @@ When developing and/or installing kernels for MBL, it's good to be able to count
 This section explains how you can achieve these 4 capabilities.
 
 ## Introduction to u-boot environment variables and boot file (/boot/boot.scr) ##
-Read [here](https://www.denx.de/wiki/U-Boot) to understand what u-boot does and how it works in details.
+Read __[here](https://www.denx.de/wiki/U-Boot)__ to understand what u-boot does and how it works in details.
 Basically, our MBL hardware has a 2012 version of u-boot flashed onto NAND flash. When you power on the MBL, the board boots into the u-boot boot loader. From there, u-boot has a number of variables in persistent flash memory that guides it to boot either original or custom firmware.  Those variables can be set/modified by interacting with the u-boot console using the `setenv` command and made persistant by using `savenv`. Alternatively, it's also possible to access the persistant storage of u-boot variables from a running Debian Linux image (see below).</br>  Some variables:</br>
 - __ipaddr__: the IP address of your WBL NAS when booting into u-boot boot loader
 - __serverip__: the default IP address of the BOOTP/TFTP server (172.25.102.35)
 - __hostname__: the default hostname (apollo3g)
-- __bootargs__: the default boot argumnets passed on to the kernel
+- __bootargs__: the default boot arguments passed on to the kernel
 - __load_boot_file_1__: the default boot file /boot/boot.scr
 
 Below you will information on how to customize these variables and control the way your boots by modifying the _/boot/boot.scr_ file
