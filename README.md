@@ -1,5 +1,5 @@
 # My-Book-Live (MBL) customization
-Kernel patches and Debian release for Western Digital My Book Live.
+Kernel patches and Debian release for Western Digital My Book Live.</br>
 __NOTE__: these customizations will void your warranty and are delivered on best-effort only
 __NOTE__: while the posted methods allow you to fully customize a MBL without ever opening it, you need to keep in mind that there might be a failure which requires you to ultimately open up the shell. 
 __NOTE__: none of this work is tested on a My Book Live DUO for the simple reason that we don't own one. That said it, community members have successfully deployed on MBL Duo.
