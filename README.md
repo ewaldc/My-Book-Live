@@ -6,11 +6,11 @@ __NOTE__: none of this work is tested on a My Book Live DUO for the simple reaso
   
 ## Why customize ? ##
 
-- My disk died: in this scenario, you may have to open up your MBL if your warranty is void and you will be exposed to the "complexity" of Linux commands/shell scripts, formatting, u-boot, etc.   It's a good time to explore the possibilities. 
-- Supportability: original firmware comes with Debian Lenny (5.0.x), which was released in February 2009.  Security and other updates have been discontinued as of February 2012.  While Western Digital has done a great job to provide updated firmware, it's ultimately impossible to keep up with back-porting vulnerability updates on pre-2010, outdated releases.
-- Security vulnerabilities: protect your valuable data (see [report](https://techrevelations.de/2018/07/28/sorry-your-nas-is-not-safe-anymore/)
-- Performance: custom kernels can increase your performance by 50%+
-- Functionality: many new packages are no longer supported on 2.6 kernels and Debian Jessie (e.g. newer versions of Samba with better Windows 10 support)
+- __My disk died__: in this scenario, you may have to open up your MBL if your warranty is void and you will be exposed to the "complexity" of Linux commands/shell scripts, formatting, u-boot, etc.   It's a good time to explore all the possibilities. 
+- __Supportability__: original firmware comes with Debian Lenny (5.0.x), which was released in February 2009.  Security and other updates have been discontinued as of February 2012.  While Western Digital has done a great job to provide updated firmware, it's ultimately impossible to keep up with back-porting vulnerability updates on pre-2010, outdated releases.
+- __Security vulnerabilities__: protect your valuable data (see [report](https://techrevelations.de/2018/07/28/sorry-your-nas-is-not-safe-anymore/))
+- __Performance__: custom kernels can increase your performance by 50%+
+- __Functionality__: many new packages are no longer supported on 2.6 kernels and Debian Jessie (e.g. newer versions of Samba with better Windows 10 support)
 
 ## Why not customize ? ##
 - Losing WD support/warranty
