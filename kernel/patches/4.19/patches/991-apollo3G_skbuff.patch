@@ -1,0 +1,21 @@
+--- a/net/core/skbuff.c	2017-09-27 12:40:05.000000000 +0000
++++ b/net/core/skbuff.c	2019-03-03 15:40:44.114488657 +0000
+@@ -2157,7 +2157,7 @@
+ /*
+  * Fill page/offset/length into spd, if it can hold more pages.
+  */
+-static bool spd_fill_page(struct splice_pipe_desc *spd,
++static __always_inline bool spd_fill_page(struct splice_pipe_desc *spd,
+ 			  struct pipe_inode_info *pipe, struct page *page,
+ 			  unsigned int *len, unsigned int offset,
+ 			  bool linear,
+@@ -2184,7 +2184,7 @@
+ 	return false;
+ }
+ 
+-static bool __splice_segment(struct page *page, unsigned int poff,
++static __always_inline bool __splice_segment(struct page *page, unsigned int poff,
+ 			     unsigned int plen, unsigned int *off,
+ 			     unsigned int *len,
+ 			     struct splice_pipe_desc *spd, bool linear,
+

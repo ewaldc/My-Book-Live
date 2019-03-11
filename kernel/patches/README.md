@@ -44,7 +44,7 @@ Since My Book Live is based on a 2009 PowerPC 32-bit architecture, it makes no s
 
 Kernel 4.14 has some nice new functions but requires many patches (just take a look at OpenWRT team patches for 18.06.1 for just about any router). Despite all the patches, tremendoes work from the OpenWRT team, I have not been able to keep this kernel running for more than a week under torture test.  Performance-wise it might be at par with 4.9.x given some extra tuning.   At this moment 4.19 is the most promising kernel, but it will requires substantional amounts of work to get everything ported.
 
-In the 4.19 folder, you will find the first released patch set for 4.19 that delivers performance at par with 4.9 and survived 96 hours of torture test with no (major) memory leak.
+In the 4.19 folder, you will find the first released patch set for 4.19 that delivers decent performance and survives 96 hours of torture test with no (major) memory leak.
 
 Another development route is to further tune 4.9 performance and bring in new functions like:
 * DMA hardware support
