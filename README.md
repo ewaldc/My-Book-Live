@@ -20,7 +20,7 @@ __NOTE__: none of this work is tested on a My Book Live DUO for the simple reaso
 
 * __debian__: Debian 8.11 with security patches backported to PowerPC
 * __kernel__: Kernel patches, pre-compiled kernels and device tree structure
-* __samba__ : Optimal perfomance with Samba using smaple config files
+* __samba__ : Optimal perfomance with Samba using sample config files
 * __uboot__ : Netconsole support, u-boot boot files, TFTP boot and ways to safely boot My Book Live
 
 Documentation is posted within each section.
