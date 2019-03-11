@@ -90,7 +90,7 @@ cp arch/powerpc/boot/uImage /boot/uImage_$KERNEL_VERSION
 Now you have succesfully build the kernel, keep in mind that none of these kernels are officially supported, so what follows is __always at your own risk__.
 
 Make sure your `/boot/boot.scr` and `/boot/apollo3g.dtb` are compatible with the new kernel, which for 4.19 is different than 4.9 !<br>
-Put new kernel in place, make sure you have copied the original one:<br>
+Put new kernel in place, make sure you have copied the original one:<br> 
 ```
 mv /boot/uImage /boot/uImage.bck
 ln /boot/uImage_$KERNEL_VERSION /boot/uImage
