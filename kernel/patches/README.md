@@ -31,7 +31,7 @@ But there are also reasons to consider other alternatives:
 
 At this moment, the most performant, up-to-date and fully supported Linux 4.x kernel is 4.9.  It's a kernel with extended support life (LTS) and the best balance between size and supportability.  Please note that at this moment no other active kernel  kernel has a longer support life according to Greg Kroah-Hartman on this releases [page](https://www.kernel.org/releases.html)
 
-With a 4.9.x customer kernel, standard 4K filesystem block size ext4 file system, Debian 8.11, page size of 64K, network MTU size of 4088, one can expect:
+With a 4.9.x customer kernel, standard 4K filesystem block size ext4 file system, Debian 8.11, page size of 64K, network MTU size of 4080, one can expect:
 * Sequential disk reads of 160MB/s (dd if=tst.dd of=/dev/null bs=1M count=1K)
 * Sequential disk writes of 140MB/s (dd if=/dev/zero of=tst.dd  bs=1M count=1K)
 * Samba read speed of 110 MB/s (1GB file read, Windows 10 64-bit)
@@ -42,14 +42,14 @@ With a 4.9.x customer kernel, standard 4K filesystem block size ext4 file system
 
 Since My Book Live is based on a 2009 PowerPC 32-bit architecture, it makes no sense to focus on kernels that are not Long Term Support releases.  That limits the choice for newer kernels to 4.14 and 4.19 (as of now).
 
-Kernel 4.14 has some nice new functions but requires many patches (just take a look at OpenWRT team patches for 18.06.1 for just about any router). Despite all the patches, tremendoes work from the OpenWRT team, I have not been able to keep this kernel running for more than a week under torture test.  Performance-wise it might be at par with 4.9.x given some extra tuning.   At this moment 4.19 is the most promising kernel, but it will requires substantional amounts of work to get everything ported.
+Kernel 4.14 has some nice new functions but requires many patches (just take a look at OpenWRT team patches for 18.06.1 for just about any router). Despite all the patches, tremendoes work from the OpenWRT team, I have not been able to keep this kernel running for more than a week under torture test.  At this moment 4.19 is the most promising kernel, but it will requires substantional amounts of work to get everything ported. Performance-wise it might be at par with 4.9.x given some extra tuning.   
 
 In the 4.19 folder, you will find the first released patch set for 4.19 that delivers decent performance and survives 96 hours of torture test with no (major) memory leak.
 
 Another development route is to further tune 4.9 performance and bring in new functions like:
 * DMA hardware support
 * huge page support
-* update standard 4.9 drivers with my custom hardware enablement (e.g. network and sata drivers)
+* update standard 4.9 drivers with custom hardware enablement (e.g. network and sata drivers)
 * DMA splice, user-to-user space splice.  Prototype code achieved 122 MB/s SAMBA write!
 * more crypto HW acceleration
 
