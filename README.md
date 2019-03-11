@@ -30,6 +30,7 @@ Kernel 4.9.149, released Wed, 9 Jan 2019
 
 
 ## What is new ? ##
+* __4.19 kernel (pre-compiled and patches) released__
 * section on Samba
 * section on cross-compiling kernels
 * fixed a few Github postng issues
