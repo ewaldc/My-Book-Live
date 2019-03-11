@@ -43,7 +43,7 @@ If you are using Windows, make sure you have tools to log into the My Book Live 
 My favorites are [kitty](http://www.9bis.net/kitty/) (a portable fork of putty which auto-reconnects after a reboot) and [WinSCP](https://winscp.net/eng/download.php)
  
 Download the 4.19 kernel of your choice:
-* using github: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git.  For example clone https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/tree/?h=v4.9.149
+* using github: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git.  For example clone https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/tree/?h=v4.19.24
 * download the latest compressed tarball: https://www.kernel.org/
 * download a version of your choice in compressed tar format (gz or xz, xz preferred as it is the smaller size): https://mirrors.edge.kernel.org/pub/linux/kernel/v4.x/
 
