@@ -109,4 +109,6 @@ With a 4.19.x customer kernel, standard 4K block size ext4 file system, Debian 8
 * over 400 days of uptime as measured on a My Book Live NAS used in a muti-user production environment
 
 ## Supportability ##
-At this point in time, __no other 4.x kernel will have a longer support life than 4.9__
+Kernel 4.19 series are Long Term Support (LTS) releases and very recent, so a long support live is ahead of us.
+
+However. at this point in time, __no other 4.x kernel will have a longer support life than 4.9__
