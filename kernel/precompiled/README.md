@@ -29,6 +29,7 @@ You will need to update `/etc/network/if-up.d/tuneperf` to use Jumbo packets or 
 * 4.9.119_hdd_led: first kernel to include hard disk activity led patch, with netconsole. First 4.9.1xx kernel to have survived the 96 hour torture test due to a defect that was introduced probably in 4.9.10[1234]. 
 * 4.9.135: streamlined config (e.g. less performance counters, more functions pushed to modules) resulting in smaller size kernel
 * 4.9.149: comes in three configurations : optimized for space, optimized for performance which is ~400K larger and a version of the latter which includes IO accounting (allows to run `iotop`).  In practical use though there is not much performance difference...
+* 4.19.24: comes in a single config file which is close to 4.9.149 optimized for performance but with a 16K page size
 
 ## Installing pre-build kernels on Debian Jessie ##
 All posted kernels are compressed tar archives with [7zip](https://www.7-zip.org/) and contain:
