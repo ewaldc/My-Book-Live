@@ -25,9 +25,10 @@ __NOTE__: none of this work is tested on a My Book Live DUO for the simple reaso
 
 Documentation is posted within each section.
 
-## Latest kernel support ##
-Kernel 4.9.149, released Wed, 9 Jan 2019
-Kernel 4.19.25, released Feb, 23 Jan 2019
+## Latest validated kernel support ##
+* Kernel 2.6.32.71, released Sat, 12 Mar 2016<br>
+* Kernel 4.9.149, released Wed, 9 Jan 2019<br>
+* Kernel 4.19.25, released Feb, 23 Jan 2019
 
 
 ## What is new ? ##
