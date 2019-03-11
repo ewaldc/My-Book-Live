@@ -11,9 +11,9 @@ Pre-4.19.19 versions are to be avoided for stability reasons. Versions post 4.19
 Last version validated: 4.19.25
 
 ## What's changed compared to 4.9.x ? ##
-The DesignWare (DW) DMA and SATA driver code have evolved to levels of performance that are close enough to the custom SATA DWC NCQ driver to discontinue it.  All the credit for this work goes to the OpenWRT team (chunkeey). However, there plenty of room for further tuning of these drivers and some of the code of the SATA DWC NQC driver will be integrated.  The OpenWRT team will be able to pick up this work if they desire so.
+The DesignWare (DW) DMA and SATA driver code have evolved to levels of performance that are close enough to the custom SATA DWC NCQ driver to discontinue it.  All the credit for this work goes to the OpenWRT team (chunkeey). However, there is plenty of room for further tuning of these drivers and some of the code of the SATA DWC NCQ driver will be integrated.  The OpenWRT team will be able to pick up this work if they desire so.
 
-One disadvantage of using the DW DMA and SATA drivers is the fact that they don't work with 64K page sizes due to a defect, so the kernel has to be compiled with 4K or 16 page sizes.  Given, I wil will fix the code, but 16K page size delivers decent performance.
+One disadvantage of using the DW DMA and SATA drivers is the fact that they don't work with 64K page sizes due to a defect, so the kernel has to be compiled with 4K or 16 page sizes.  Given time, I wil will fix the code, but 16K page size delivers decent performance for now and consumes less memory.
 Are also being dropped: custom USB and led drivers.
 
 
