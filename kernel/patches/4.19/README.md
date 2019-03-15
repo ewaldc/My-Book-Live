@@ -96,6 +96,12 @@ mv /boot/uImage /boot/uImage.bck
 ln /boot/uImage_$KERNEL_VERSION /boot/uImage
 ```
 
+Please note that the __swap space must match the kernel block size__. So, if new kernel has a different page size than the previous one, you need to re-initialize swap space.  Assuming the standard MBL disk layout, swap space is on `/dev/sda3`.  The `mkswap` command will read the kernel page size, so no need to pass the `--pagesize` option if you already booted from the new kernel.  Since 4.9.x and 4.19.x have different default page sizes in the default kernel configuration files (for now), 64K and 16K respectively, this issue might arise as you swap kernels.
+
+```
+mkswap --pagesize 16384 /dev/sda3
+```
+
 Reboot, make sure your netconsole windows are ready and ... good luck:<br>
 `systemctl reboot`
 
