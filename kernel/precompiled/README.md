@@ -46,3 +46,10 @@ tar -xzf /tmp/linux-4.9.135.tgz
 cp /boot/uImage_4.9.135 /boot/uImage
 systemctl reboot
 ```
+
+Please note that the __swap space must match the kernel block size__. So, if the new kernel has a different page size than the previous one, you need to re-initialize swap space.  Assuming the standard MBL disk layout, swap space is on `/dev/sda3`.  The mkswap command will read the kernel page size, so no need to pass the `--pagesize` option.  Since 4.9.x and 4.19.x have different page sizes (for now), 64K and 16K respectively, this issue will arise as you swap kernels.
+
+
+``
+mkswap /dev/sda3
+```
