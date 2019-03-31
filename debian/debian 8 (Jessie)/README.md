@@ -59,11 +59,26 @@ rm /etc/ssh/ssh_host* _
 dpkg-reconfigure openssh-server
 systemctl restart ssh
 
+
 # re-load key services
 invoke-rc.d hostname.sh start
 invoke-rc.d networking force-reload
 invoke-rc.d network-manager force-reload
 ```
+- fix /etc/apt/source.list to list updated package repositories
+Since Debian is no longer supported for 32-bit PowerPC, the package depots have moved to archive.
+```
+deb http://archive.debian.org/debian/ jessie main contrib non-free
+``` 
+
+- optionally, add Debian port repositories
+If you are looking for the latest packages such as gcc verson 8.30, you can also include
+```
+# Debian ports
+deb http://ftp.ports.debian.org/debian-ports unstable main
+deb http://ftp.ports.debian.org/debian-ports unreleased main
+```
+But, be careful: do not do a full update from these respositories as you **may** end up with a non booting system
 
 - create /etc/rsyncd.secrets if needed
 
