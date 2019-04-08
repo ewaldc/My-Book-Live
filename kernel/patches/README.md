@@ -59,5 +59,6 @@ Things under consideration and/or under development:
 * Recompile some Debian executables to leverage capabilities of the new kernels
 * Enable powerpc kernel debugging and profiling (done) and code powerpc 32 branch tracing (complex)
 * Fix ext4 code paths (ext4 has been slowing down since 3.18, about 15%) - status : being lazy and waiting for 5.x cleanup work
+* NCQ support - status : investigation
 
 Ultimately, at this point in time, __no other 4.x kernel will have a longer support life than 4.9__
