@@ -33,7 +33,8 @@ Documentation is posted within each section.
 
 ## What is new ? ##
 * __4.19 kernel (pre-compiled and patches) released__
-* High performance 4.19.34 released
+* high performance kernel 4.19.33 released
+* patches updated for 4.19.34 (slightly slower due to a few code changes)
 * section on Samba
 * section on cross-compiling kernels
 * fixed a few Github postng issues
