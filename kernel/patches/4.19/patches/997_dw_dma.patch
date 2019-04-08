@@ -1,0 +1,632 @@
+--- a/drivers/dma/dw/core.c	2019-04-06 08:23:44.054032732 +0200
++++ b/drivers/dma/dw/core.c	2019-04-06 09:30:30.247045671 +0200
+@@ -108,12 +108,12 @@
+ 	dma_addr_t phys;
+ 
+ 	desc = dma_pool_zalloc(dw->desc_pool, GFP_ATOMIC, &phys);
+-	if (!desc)
++	if (unlikely(!desc))
+ 		return NULL;
+ 
+ 	dwc->descs_allocated++;
+ 	INIT_LIST_HEAD(&desc->tx_list);
+-	dma_async_tx_descriptor_init(&desc->txd, &dwc->chan);
++	desc->txd.chan = &dwc->chan; //dma_async_tx_descriptor_init(&desc->txd, &dwc->chan);
+ 	desc->txd.tx_submit = dwc_tx_submit;
+ 	desc->txd.flags = DMA_CTRL_ACK;
+ 	desc->txd.phys = phys;
+@@ -175,15 +175,11 @@
+ 	channel_writel(dwc, CFG_LO, cfglo);
+ 	channel_writel(dwc, CFG_HI, cfghi);
+ }
+-
+-static void dwc_initialize(struct dw_dma_chan *dwc)
++#define dwc_initialize(dwc) if (unlikely(!test_bit(DW_DMA_IS_INITIALIZED, &dwc->flags))) _dwc_initialize(dwc)
++static void _dwc_initialize(struct dw_dma_chan *dwc)
+ {
+ 	struct dw_dma *dw = to_dw_dma(dwc->chan.device);
+-
+-	if (test_bit(DW_DMA_IS_INITIALIZED, &dwc->flags))
+-		return;
+-
+-	if (dw->pdata->is_idma32)
++	if (unlikely(dw->pdata->is_idma32))
+ 		dwc_initialize_chan_idma32(dwc);
+ 	else
+ 		dwc_initialize_chan_dw(dwc);
+@@ -215,28 +211,33 @@
+ 		cpu_relax();
+ }
+ 
+-static u32 bytes2block(struct dw_dma_chan *dwc, size_t bytes,
+-			  unsigned int width, size_t *len)
++#if defined(CONFIG_APM821xx)
++#define DMA_CTL_BLK_TS(size)	(size & 0x000000FFF)	/* Blk Transfer size */
++//#else
++static __always_inline u32 bytes2block(struct dw_dma_chan *dwc, unsigned int block_size,
++			size_t bytes, unsigned int width, size_t *dlen)
+ {
+ 	struct dw_dma *dw = to_dw_dma(dwc->chan.device);
+-	u32 block;
+ 
+ 	/* Always in bytes for iDMA 32-bit */
+-	if (dw->pdata->is_idma32)
+-		width = 0;
++	if (dw->pdata->is_idma32)	width = 0;
+ 
+-	if ((bytes >> width) > dwc->block_size) {
+-		block = dwc->block_size;
+-		*len = block << width;
++	if ((bytes >> width) > block_size) { 
++		*dlen = block_size << width;
++		return block_size;
+ 	} else {
+-		block = bytes >> width;
+-		*len = bytes;
++		*dlen = bytes;
++		return bytes >> width;
+ 	}
+ 
+-	return block;
++	//return block;
+ }
++#endif
+ 
+-static size_t block2bytes(struct dw_dma_chan *dwc, u32 block, u32 width)
++#if defined(CONFIG_APM821xx)
++#define block2bytes(dwc, block, width) (DWC_CTLH_BLOCK_TS(block) << width)
++#else
++static inline size_t block2bytes(struct dw_dma_chan *dwc, u32 block, u32 width)
+ {
+ 	struct dw_dma *dw = to_dw_dma(dwc->chan.device);
+ 
+@@ -245,7 +246,7 @@
+ 
+ 	return DWC_CTLH_BLOCK_TS(block) << width;
+ }
+-
++#endif
+ /*----------------------------------------------------------------------*/
+ 
+ /* Perform single block transfer */
+@@ -276,10 +277,9 @@
+ {
+ 	struct dw_dma	*dw = to_dw_dma(dwc->chan.device);
+ 	u8		lms = DWC_LLP_LMS(dwc->dws.m_master);
+-	unsigned long	was_soft_llp;
+ 
+ 	/* ASSERT:  channel is idle */
+-	if (dma_readl(dw, CH_EN) & dwc->mask) {
++	if (unlikely(dma_readl(dw, CH_EN) & dwc->mask)) {
+ 		dev_err(chan2dev(&dwc->chan),
+ 			"%s: BUG: Attempted to start non-idle channel\n",
+ 			__func__);
+@@ -289,9 +289,8 @@
+ 		return;
+ 	}
+ 
+-	if (dwc->nollp) {
+-		was_soft_llp = test_and_set_bit(DW_DMA_IS_SOFT_LLP,
+-						&dwc->flags);
++	if (unlikely(dwc->nollp)) {
++		unsigned long was_soft_llp = test_and_set_bit(DW_DMA_IS_SOFT_LLP, &dwc->flags);
+ 		if (was_soft_llp) {
+ 			dev_err(chan2dev(&dwc->chan),
+ 				"BUG: Attempted to start new LLP transfer inside ongoing one\n");
+@@ -333,8 +332,7 @@
+ /*----------------------------------------------------------------------*/
+ 
+ static void
+-dwc_descriptor_complete(struct dw_dma_chan *dwc, struct dw_desc *desc,
+-		bool callback_required)
++dwc_descriptor_complete(struct dw_dma_chan *dwc, struct dw_desc *desc, bool callback_required)
+ {
+ 	struct dma_async_tx_descriptor	*txd = &desc->txd;
+ 	struct dw_desc			*child;
+@@ -360,14 +358,14 @@
+ 	dmaengine_desc_callback_invoke(&cb, NULL);
+ }
+ 
+-static void dwc_complete_all(struct dw_dma *dw, struct dw_dma_chan *dwc)
++static __always_inline void dwc_complete_all(struct dw_dma *dw, struct dw_dma_chan *dwc, unsigned long flags)
+ {
+ 	struct dw_desc *desc, *_desc;
+ 	LIST_HEAD(list);
+-	unsigned long flags;
++	//unsigned long flags;
+ 
+-	spin_lock_irqsave(&dwc->lock, flags);
+-	if (dma_readl(dw, CH_EN) & dwc->mask) {
++	//spin_lock_irqsave(&dwc->lock, flags);
++	if (unlikely(dma_readl(dw, CH_EN) & dwc->mask)) {
+ 		dev_err(chan2dev(&dwc->chan),
+ 			"BUG: XFER bit set, but channel not idle!\n");
+ 
+@@ -389,7 +387,7 @@
+ }
+ 
+ /* Returns how many bytes were already received from source */
+-static inline u32 dwc_get_sent(struct dw_dma_chan *dwc)
++static __always_inline u32 dwc_get_sent(struct dw_dma_chan *dwc)
+ {
+ 	u32 ctlhi = channel_readl(dwc, CTL_HI);
+ 	u32 ctllo = channel_readl(dwc, CTL_LO);
+@@ -413,9 +411,8 @@
+ 		/* Everything we've submitted is done */
+ 		dma_writel(dw, CLEAR.XFER, dwc->mask);
+ 
+-		if (test_bit(DW_DMA_IS_SOFT_LLP, &dwc->flags)) {
++		if (unlikely(test_bit(DW_DMA_IS_SOFT_LLP, &dwc->flags))) {
+ 			struct list_head *head, *active = dwc->tx_node_active;
+-
+ 			/*
+ 			 * We are inside first active descriptor.
+ 			 * Otherwise something is really wrong.
+@@ -434,30 +431,21 @@
+ 
+ 				/* Submit next block */
+ 				dwc_do_single_block(dwc, child);
+-
+-				spin_unlock_irqrestore(&dwc->lock, flags);
+-				return;
++				goto exit;
+ 			}
+ 
+ 			/* We are done here */
+ 			clear_bit(DW_DMA_IS_SOFT_LLP, &dwc->flags);
+ 		}
+-
+-		spin_unlock_irqrestore(&dwc->lock, flags);
+-
+-		dwc_complete_all(dw, dwc);
++		dwc_complete_all(dw, dwc, flags);  // will unlock
+ 		return;
+ 	}
+ 
+-	if (list_empty(&dwc->active_list)) {
+-		spin_unlock_irqrestore(&dwc->lock, flags);
+-		return;
+-	}
++	if (list_empty(&dwc->active_list)) goto exit;
+ 
+-	if (test_bit(DW_DMA_IS_SOFT_LLP, &dwc->flags)) {
++	if (unlikely(test_bit(DW_DMA_IS_SOFT_LLP, &dwc->flags))) {
+ 		dev_vdbg(chan2dev(&dwc->chan), "%s: soft LLP mode\n", __func__);
+-		spin_unlock_irqrestore(&dwc->lock, flags);
+-		return;
++		goto exit;
+ 	}
+ 
+ 	dev_vdbg(chan2dev(&dwc->chan), "%s: llp=%pad\n", __func__, &llp);
+@@ -467,17 +455,13 @@
+ 		desc->residue = desc->total_len;
+ 
+ 		/* Check first descriptors addr */
+-		if (desc->txd.phys == DWC_LLP_LOC(llp)) {
+-			spin_unlock_irqrestore(&dwc->lock, flags);
+-			return;
+-		}
++		if (desc->txd.phys == DWC_LLP_LOC(llp)) goto exit;
+ 
+ 		/* Check first descriptors llp */
+ 		if (lli_read(desc, llp) == llp) {
+ 			/* This one is currently in progress */
+ 			desc->residue -= dwc_get_sent(dwc);
+-			spin_unlock_irqrestore(&dwc->lock, flags);
+-			return;
++			goto exit;
+ 		}
+ 
+ 		desc->residue -= desc->len;
+@@ -485,8 +469,7 @@
+ 			if (lli_read(child, llp) == llp) {
+ 				/* Currently in progress */
+ 				desc->residue -= dwc_get_sent(dwc);
+-				spin_unlock_irqrestore(&dwc->lock, flags);
+-				return;
++				goto exit;
+ 			}
+ 			desc->residue -= child->len;
+ 		}
+@@ -507,6 +490,7 @@
+ 	dwc_chan_disable(dw, dwc);
+ 
+ 	dwc_dostart_first_queued(dwc);
++exit:
+ 	spin_unlock_irqrestore(&dwc->lock, flags);
+ }
+ 
+@@ -567,20 +551,17 @@
+ {
+ 	struct dw_dma *dw = (struct dw_dma *)data;
+ 	struct dw_dma_chan *dwc;
+-	u32 status_xfer;
+-	u32 status_err;
+ 	unsigned int i;
+-
+-	status_xfer = dma_readl(dw, RAW.XFER);
+-	status_err = dma_readl(dw, RAW.ERROR);
++	u32 status_xfer = dma_readl(dw, RAW.XFER);
++	u32 status_err  = dma_readl(dw, RAW.ERROR);
+ 
+ 	dev_vdbg(dw->dma.dev, "%s: status_err=%x\n", __func__, status_err);
+ 
+ 	for (i = 0; i < dw->dma.chancnt; i++) {
+ 		dwc = &dw->chan[i];
+-		if (test_bit(DW_DMA_IS_CYCLIC, &dwc->flags))
++		if (unlikely(test_bit(DW_DMA_IS_CYCLIC, &dwc->flags)))
+ 			dev_vdbg(dw->dma.dev, "Cyclic xfer is not implemented\n");
+-		else if (status_err & (1 << i))
++		else if (unlikely(status_err & (1 << i)))
+ 			dwc_handle_error(dw, dwc);
+ 		else if (status_xfer & (1 << i))
+ 			dwc_scan_descriptors(dw, dwc);
+@@ -642,15 +623,16 @@
+ {
+ 	struct dw_dma_chan	*dwc = to_dw_dma_chan(chan);
+ 	struct dw_dma		*dw = to_dw_dma(chan->device);
+-	struct dw_desc		*desc;
++	register struct dw_desc		*desc;
+ 	struct dw_desc		*first;
+ 	struct dw_desc		*prev;
+ 	size_t			xfer_count;
+-	size_t			offset;
++	register size_t			offset;
+ 	u8			m_master = dwc->dws.m_master;
+ 	unsigned int		src_width;
+ 	unsigned int		dst_width;
+ 	unsigned int		data_width = dw->pdata->data_width[m_master];
++	unsigned int		block_size = dwc->block_size;
+ 	u32			ctllo;
+ 	u8			lms = DWC_LLP_LMS(m_master);
+ 
+@@ -683,7 +665,7 @@
+ 		lli_write(desc, sar, src + offset);
+ 		lli_write(desc, dar, dest + offset);
+ 		lli_write(desc, ctllo, ctllo);
+-		lli_write(desc, ctlhi, bytes2block(dwc, len - offset, src_width, &xfer_count));
++		lli_write(desc, ctlhi, bytes2block(dwc, block_size, len - offset, src_width, &xfer_count));
+ 		desc->len = xfer_count;
+ 
+ 		if (!first) {
+@@ -716,133 +698,131 @@
+ 		unsigned int sg_len, enum dma_transfer_direction direction,
+ 		unsigned long flags, void *context)
+ {
++	//struct sata_dwc_device *hsdev = context;
+ 	struct dw_dma_chan	*dwc = to_dw_dma_chan(chan);
+-	struct dw_dma		*dw = to_dw_dma(chan->device);
+ 	struct dma_slave_config	*sconfig = &dwc->dma_sconfig;
+ 	struct dw_desc		*prev;
+ 	struct dw_desc		*first;
+-	u32			ctllo;
+-	u8			m_master = dwc->dws.m_master;
+-	u8			lms = DWC_LLP_LMS(m_master);
+-	dma_addr_t		reg;
++	u32					ctllo;
++	u8					m_master = dwc->dws.m_master;
++	u8					lms = DWC_LLP_LMS(m_master);
++	dma_addr_t			reg;
++
++#if defined(CONFIG_APM821xx)
++	#define 			mem_width 2
++	#define 			reg_width 2
++	#define 			max_block_size 4095
++	#define				max_block_bytes (max_block_size << 2) //16380
++#else
+ 	unsigned int		reg_width;
+ 	unsigned int		mem_width;
++	struct dw_dma		*dw = to_dw_dma(chan->device);
+ 	unsigned int		data_width = dw->pdata->data_width[m_master];
++	unsigned int		max_block_size = dwc->block_size;
++#endif
+ 	unsigned int		i;
++	size_t				total_len = 0, dlen;
++	register 			struct dw_desc	*desc;
+ 	struct scatterlist	*sg;
+-	size_t			total_len = 0;
+ 
+ 	dev_vdbg(chan2dev(chan), "%s\n", __func__);
+ 
+-	if (unlikely(!is_slave_direction(direction) || !sg_len))
+-		return NULL;
+-
++	if (unlikely(!is_slave_direction(direction) || !sg_len)) return NULL;
+ 	dwc->direction = direction;
+-
+ 	prev = first = NULL;
++	
++	/* len is always a multiple of file system block size (4K) up to page size */
++	if (direction == DMA_DEV_TO_MEM) {
++#if !defined(CONFIG_APM821xx)
++		reg_width = __ffs(sconfig->src_addr_width);
++		ctllo = sconfig->device_fc ? DWC_CTLL_FC(DW_DMA_FC_P_P2M) : DWC_CTLL_FC(DW_DMA_FC_D_P2M);
++#else
++		ctllo = DWC_CTLL_FC(DW_DMA_FC_D_P2M); // sconfig->device_fc always false
++#endif
++		ctllo |= DWC_DEFAULT_CTLLO(chan)| DWC_CTLL_SRC_WIDTH(reg_width)| DWC_CTLL_DST_INC| DWC_CTLL_SRC_FIX;
++		reg = sconfig->src_addr; //dmadr
++		//if (reg != sg_dma_address(sg)) printk(KERN_INFO "DWC DMA:%s %08x %08x\n", reg, sg_dma_address(sg));
+ 
+-	switch (direction) {
+-	case DMA_MEM_TO_DEV:
++		for_each_sg(sgl, sg, sg_len, i) {
++			u32	len = sg_dma_len(sg), mem = sg_dma_address(sg);
++			
++			do {
++				desc = dwc_desc_get(dwc);
++				if (unlikely(!desc)) goto err_desc_get;
++
++				lli_write(desc, sar, reg);
++				lli_write(desc, dar, mem);
++				
++#if defined(CONFIG_APM821xx)
++				dlen = (len > max_block_bytes) ? max_block_bytes : len;
++				lli_write(desc, ctlhi, DMA_CTL_BLK_TS(dlen >> 2));
++#else
++
++				lli_write(desc, ctlhi, bytes2block(dwc, max_block_size, len, reg_width, &dlen));
++#endif
++
++	#if !defined(CONFIG_APM821xx)
++				mem_width = __ffs(data_width | mem | dlen);
++	#endif
++				lli_write(desc, ctllo, ctllo | DWC_CTLL_DST_WIDTH(mem_width));
++				desc->len = dlen;
++
++				if (!first) first = desc;
++				else {
++					lli_write(prev, llp, desc->txd.phys | lms);
++					list_add_tail(&desc->desc_node, &first->tx_list);
++				}
++				prev = desc;
++				mem += dlen;
++				len -= dlen;
++				total_len += dlen;
++			} while (len);
++		}
++	} else if (likely(direction == DMA_MEM_TO_DEV)) {
++#if !defined(CONFIG_APM821xx)
+ 		reg_width = __ffs(sconfig->dst_addr_width);
++		ctllo = sconfig->device_fc ? DWC_CTLL_FC(DW_DMA_FC_P_M2P) : DWC_CTLL_FC(DW_DMA_FC_D_M2P);
++#else
++		ctllo = DWC_CTLL_FC(DW_DMA_FC_D_M2P);
++#endif
++		ctllo |= DWC_DEFAULT_CTLLO(chan)| DWC_CTLL_DST_WIDTH(reg_width)| DWC_CTLL_DST_FIX| DWC_CTLL_SRC_INC;
+ 		reg = sconfig->dst_addr;
+-		ctllo = (DWC_DEFAULT_CTLLO(chan)
+-				| DWC_CTLL_DST_WIDTH(reg_width)
+-				| DWC_CTLL_DST_FIX
+-				| DWC_CTLL_SRC_INC);
+-
+-		ctllo |= sconfig->device_fc ? DWC_CTLL_FC(DW_DMA_FC_P_M2P) :
+-			DWC_CTLL_FC(DW_DMA_FC_D_M2P);
+ 
+ 		for_each_sg(sgl, sg, sg_len, i) {
+-			struct dw_desc	*desc;
+-			u32		len, mem;
+-			size_t		dlen;
+-
+-			mem = sg_dma_address(sg);
+-			len = sg_dma_len(sg);
+-
++			u32	len = sg_dma_len(sg), mem = sg_dma_address(sg);
++#if !defined(CONFIG_APM821xx)
+ 			mem_width = __ffs(data_width | mem | len);
+-
+-slave_sg_todev_fill_desc:
+-			desc = dwc_desc_get(dwc);
+-			if (!desc)
+-				goto err_desc_get;
+-
+-			lli_write(desc, sar, mem);
+-			lli_write(desc, dar, reg);
+-			lli_write(desc, ctlhi, bytes2block(dwc, len, mem_width, &dlen));
+-			lli_write(desc, ctllo, ctllo | DWC_CTLL_SRC_WIDTH(mem_width));
+-			desc->len = dlen;
+-
+-			if (!first) {
+-				first = desc;
+-			} else {
+-				lli_write(prev, llp, desc->txd.phys | lms);
+-				list_add_tail(&desc->desc_node, &first->tx_list);
+-			}
+-			prev = desc;
+-
+-			mem += dlen;
+-			len -= dlen;
+-			total_len += dlen;
+-
+-			if (len)
+-				goto slave_sg_todev_fill_desc;
++#endif
++			do {
++				desc = dwc_desc_get(dwc);
++				if (unlikely(!desc)) goto err_desc_get;
++
++				lli_write(desc, sar, mem);
++				lli_write(desc, dar, reg);
++
++	#if defined(CONFIG_APM821xx)  // Block transfer size in 32bit words
++				dlen = (len > max_block_bytes) ? max_block_bytes : len;
++				lli_write(desc, ctlhi, DMA_CTL_BLK_TS(dlen >> 2));
++	#else
++				lli_write(desc, ctlhi, bytes2block(dwc, max_block_size, len, reg_width, &dlen));
++	#endif
++				lli_write(desc, ctllo, ctllo | DWC_CTLL_SRC_WIDTH(mem_width));
++				desc->len = dlen;
++
++				if (!first) first = desc;
++				else {
++					lli_write(prev, llp, desc->txd.phys | lms);
++					list_add_tail(&desc->desc_node, &first->tx_list);
++				}
++				prev = desc;
++				mem += dlen;
++				len -= dlen;
++				total_len += dlen;
++			} while (len);
+ 		}
+-		break;
+-	case DMA_DEV_TO_MEM:
+-		reg_width = __ffs(sconfig->src_addr_width);
+-		reg = sconfig->src_addr;
+-		ctllo = (DWC_DEFAULT_CTLLO(chan)
+-				| DWC_CTLL_SRC_WIDTH(reg_width)
+-				| DWC_CTLL_DST_INC
+-				| DWC_CTLL_SRC_FIX);
+-
+-		ctllo |= sconfig->device_fc ? DWC_CTLL_FC(DW_DMA_FC_P_P2M) :
+-			DWC_CTLL_FC(DW_DMA_FC_D_P2M);
+-
+-		for_each_sg(sgl, sg, sg_len, i) {
+-			struct dw_desc	*desc;
+-			u32		len, mem;
+-			size_t		dlen;
+-
+-			mem = sg_dma_address(sg);
+-			len = sg_dma_len(sg);
+-
+-slave_sg_fromdev_fill_desc:
+-			desc = dwc_desc_get(dwc);
+-			if (!desc)
+-				goto err_desc_get;
+-
+-			lli_write(desc, sar, reg);
+-			lli_write(desc, dar, mem);
+-			lli_write(desc, ctlhi, bytes2block(dwc, len, reg_width, &dlen));
+-			mem_width = __ffs(data_width | mem | dlen);
+-			lli_write(desc, ctllo, ctllo | DWC_CTLL_DST_WIDTH(mem_width));
+-			desc->len = dlen;
+-
+-			if (!first) {
+-				first = desc;
+-			} else {
+-				lli_write(prev, llp, desc->txd.phys | lms);
+-				list_add_tail(&desc->desc_node, &first->tx_list);
+-			}
+-			prev = desc;
+-
+-			mem += dlen;
+-			len -= dlen;
+-			total_len += dlen;
+-
+-			if (len)
+-				goto slave_sg_fromdev_fill_desc;
+-		}
+-		break;
+-	default:
+-		return NULL;
+-	}
++	} else return NULL;
+ 
+-	if (flags & DMA_PREP_INTERRUPT)
+-		/* Trigger interrupt after last block */
++	if (flags & DMA_PREP_INTERRUPT) 	/* Trigger interrupt after last block */
+ 		lli_set(prev, ctllo, DWC_CTLL_INT_EN);
+ 
+ 	prev->lli.llp = 0;
+@@ -852,8 +832,7 @@
+ 	return &first->txd;
+ 
+ err_desc_get:
+-	dev_err(chan2dev(chan),
+-		"not enough descriptors available. Direction %d\n", direction);
++	dev_err(chan2dev(chan), "not enough descriptors available. Direction %d\n", direction);
+ 	dwc_desc_put(dwc, first);
+ 	return NULL;
+ }
+@@ -908,7 +887,7 @@
+ 	u32			cfglo;
+ 
+ 	cfglo = channel_readl(dwc, CFG_LO);
+-	if (dw->pdata->is_idma32) {
++	if (unlikely(dw->pdata->is_idma32)) {
+ 		if (drain)
+ 			cfglo |= IDMA32C_CFGL_CH_DRAIN;
+ 		else
+@@ -964,7 +943,6 @@
+ 	struct dw_desc		*desc, *_desc;
+ 	unsigned long		flags;
+ 	LIST_HEAD(list);
+-
+ 	spin_lock_irqsave(&dwc->lock, flags);
+ 
+ 	clear_bit(DW_DMA_IS_SOFT_LLP, &dwc->flags);
+@@ -1075,8 +1053,7 @@
+ 		    IDMA32C_FP_UPDATE;
+ 	u64 fifo_partition = 0;
+ 
+-	if (!dw->pdata->is_idma32)
+-		return;
++	if (likely(!dw->pdata->is_idma32)) return;
+ 
+ 	/* Fill FIFO_PARTITION low bits (Channels 0..1, 4..5) */
+ 	fifo_partition |= value << 0;
+--- a/drivers/dma/dw/platform.c	2019-04-06 08:23:44.054032732 +0200
++++ b/drivers/dma/dw/platform.c	2019-04-06 09:30:30.251045879 +0200
+@@ -23,6 +23,7 @@
+ #include <linux/of_dma.h>
+ #include <linux/acpi.h>
+ #include <linux/acpi_dma.h>
++#include <asm/ppc4xx_ocm.h>
+ 
+ #include "internal.h"
+ 
+@@ -102,6 +103,7 @@
+ {
+ 	struct device_node *np = pdev->dev.of_node;
+ 	struct dw_dma_platform_data *pdata;
++	//phys_addr_t	phys;
+ 	u32 tmp, arr[DW_DMA_MAX_NR_MASTERS], mb[DW_DMA_MAX_NR_CHANNELS];
+ 	u32 nr_masters;
+ 	u32 nr_channels;
+@@ -121,9 +123,10 @@
+ 	if (nr_channels > DW_DMA_MAX_NR_CHANNELS)
+ 		return NULL;
+ 
++	//pdata = ppc4xx_ocm_alloc(&phys, sizeof(*pdata), 4, PPC4XX_OCM_NON_CACHED, "dw_platform_pdata");
+ 	pdata = devm_kzalloc(&pdev->dev, sizeof(*pdata), GFP_KERNEL);
+-	if (!pdata)
+-		return NULL;
++	if (!pdata)	return NULL;
++	//memset(pdata, 0 , sizeof(*pdata));
+ 
+ 	pdata->nr_masters = nr_masters;
+ 	pdata->nr_channels = nr_channels;
+@@ -168,6 +171,12 @@
+ 		pdata->protctl = tmp;
+ 	}
+ 
++	if (!of_property_read_u32(np, "snps,dma-protection-control", &tmp)) {
++		if (tmp > CHAN_PROTCTL_MASK)
++			return NULL;
++		pdata->protctl = tmp;
++	}
++
+ 	return pdata;
+ }
+ #else
+@@ -187,9 +196,9 @@
+ 	int err;
+ 
+ 	chip = devm_kzalloc(dev, sizeof(*chip), GFP_KERNEL);
+-	if (!chip)
+-		return -ENOMEM;
+-
++	//chip = ppc4xx_ocm_alloc(&phys, sizeof(*chip), 4, PPC4XX_OCM_NON_CACHED, "dw_platform_chip");
++	if (!chip) return -ENOMEM;
++	//memset(chip, 0 , sizeof(*chip));
+ 	chip->irq = platform_get_irq(pdev, 0);
+ 	if (chip->irq < 0)
+ 		return chip->irq;
+@@ -255,6 +264,8 @@
+ 	dw_dma_remove(chip);
+ 	pm_runtime_disable(&pdev->dev);
+ 	clk_disable_unprepare(chip->clk);
++	//ppc4xx_ocm_free(chip->pdata);
++	//ppc4xx_ocm_free(chip);
+ 
+ 	return 0;
+ }
+

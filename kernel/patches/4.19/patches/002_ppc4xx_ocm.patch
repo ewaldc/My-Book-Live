@@ -1,0 +1,13 @@
+diff -Naur a/arch/powerpc/platforms/4xx/ocm.c b/arch/powerpc/platforms/4xx/ocm.c
+--- a/arch/powerpc/platforms/4xx/ocm.c	2019-03-30 11:35:06.281759489 +0100
++++ b/arch/powerpc/platforms/4xx/ocm.c	2019-03-13 22:02:41.000000000 +0100
+@@ -299,7 +299,7 @@
+ 		return -1;
+ 	}
+ 
+-	if (debugfs_create_file("info", 0644, junk, NULL, &ocm_debugfs_fops)) {
++	if (!debugfs_create_file("info", 0644, junk, NULL, &ocm_debugfs_fops)) {
+ 		printk(KERN_ALERT "debugfs ppc4xx ocm: failed to create file\n");
+ 		return -1;
+ 	}
+

@@ -6,9 +6,10 @@ However, practical experience has shown that not every version is equally stable
 Following versions have been validated as "excellent":
 * 4.19.24
 * 4.19.25
+* 4.19.34
 
 Pre-4.19.19 versions are to be avoided for stability reasons. Versions post 4.19.25 are most likely fine.
-Last version validated: 4.19.25
+Last version validated: 4.19.34
 
 ## What's changed compared to 4.9.x ? ##
 The DesignWare (DW) DMA and SATA driver code have evolved to levels of performance that are close enough to the custom SATA DWC NCQ driver to discontinue it.  All the credit for this work goes to the OpenWRT team (chunkeey). However, there is plenty of room for further tuning of these drivers and some of the code of the SATA DWC NCQ driver will be integrated.  The OpenWRT team will be able to pick up this work if they desire so.
@@ -16,9 +17,8 @@ The DesignWare (DW) DMA and SATA driver code have evolved to levels of performan
 One disadvantage of using the DW DMA and SATA drivers is the fact that they don't work with 64K page sizes due to a defect, so the kernel has to be compiled with 4K or 16 page sizes.  Given time, I wil will fix the code, but 16K page size delivers decent performance for now and consumes less memory.
 Are also being dropped: custom USB and led drivers.
 
-
 In addition, this allow to fully leverage the device tree source (DTS) from OpenWRT.
-The EMAC driver and skbuff patches are still unique and deliver 15%+ performance over the OpenWRT ones, which for NAS functionality is noticable. 
+The EMAC driver, sata_dwc_460, block, tcp, dw_dma, libata and skbuff patches are still unique and deliver 25%+ performance gain over OpenWRT, which for NAS functionality is noticable. 
 
 
 ## What's included ##
@@ -33,6 +33,8 @@ The latest version of the patches include:
 * Linux Skbuff performance tuning
 * MAL instance allocted to OCM
 * 16K Kernel Page Size (instead of 64K)
+* performance patches ported from custom sata driver
+* series of performance patches (many of which really should be included upstream)
 
 
 ## Building the kernel ##
@@ -75,6 +77,9 @@ Watch for any failed patches. Please accept my apologies if you hit an error and
 Copy one of the sample config files from [here](https://github.com/ewaldc/My-Book-Live/tree/master/kernel/patches/4.19/config) and duplicate as .config. Alternative build your own config file using `make menuconfig`:<br>
 `cp config.4.19 .config`
 
+You may want to play with the CONFIG_JUMP_LABEL parameter. 
+
+
 Build the kernel, resolve some potentional config file questions, and ... get a coffee/beer:<br>
 `make uImage`
 
@@ -110,8 +115,8 @@ Reboot, make sure your netconsole windows are ready and ... good luck:<br>
 With a 4.19.x customer kernel, standard 4K block size ext4 file system, Debian 8.11, page size of 16K, network MTU size of 4080, one can expect:
 * Sequential disk reads of 121MB/s (dd if=tst.dd of=/dev/null bs=4k count=256K)
 * Sequential disk writes of 120MB/s to 160MB/s (dd if=/dev/zero of=tst.dd bs=1M or 4K)
-* Samba read speed of 110 MB/s (1GB file read, Windows 10 64-bit)
-* Samba write speed of 75 MB/s (1GB file write, Windows 10 64-bit)
+* Samba read speed of 115 MB/s (1GB file read, Windows 10 64-bit)
+* Samba write speed of 82 MB/s (1GB file write, Windows 10 64-bit)
 * over 400 days of uptime as measured on a My Book Live NAS used in a muti-user production environment
 
 ## Supportability ##

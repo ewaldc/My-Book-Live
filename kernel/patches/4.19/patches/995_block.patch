@@ -1,0 +1,327 @@
+--- a/include/linux/blkdev.h	2019-04-02 17:04:24.495890355 +0200
++++ b/include/linux/blkdev.h	2019-04-03 13:23:38.543454962 +0200
+@@ -414,6 +414,9 @@
+ 
+ #else /* CONFIG_BLK_DEV_ZONED */
+ 
++#define blkdev_report_zones_ioctl(bdev, mode, cmd, arg) -ENOTTY
++#define blkdev_reset_zones_ioctl(bdev, mode, cmd, arg) -ENOTTY
++/*
+ static inline int blkdev_report_zones_ioctl(struct block_device *bdev,
+ 					    fmode_t mode, unsigned int cmd,
+ 					    unsigned long arg)
+@@ -427,6 +430,7 @@
+ {
+ 	return -ENOTTY;
+ }
++*/
+ 
+ #endif /* CONFIG_BLK_DEV_ZONED */
+ 
+@@ -1332,10 +1336,37 @@
+ };
+ extern struct blk_plug_cb *blk_check_plugged(blk_plug_cb_fn unplug,
+ 					     void *data, int size);
+-extern void blk_start_plug(struct blk_plug *);
+-extern void blk_finish_plug(struct blk_plug *);
+ extern void blk_flush_plug_list(struct blk_plug *, bool);
+ 
++#if defined(CONFIG_APM821xx) && !defined(_BLKDEV_H)
++#define _BLKDEV_H
++static inline void blk_start_plug(struct blk_plug *plug)
++{
++	struct task_struct *tsk = current;
++	/* If this is a nested plug, don't actually assign it. */
++	if (tsk->plug) return;
++	INIT_LIST_HEAD(&plug->list);
++	INIT_LIST_HEAD(&plug->mq_list);
++	INIT_LIST_HEAD(&plug->cb_list);
++	/* Store ordering should not be needed here, since a potential
++	 * preempt will imply a full memory barrier */
++	tsk->plug = plug;
++}
++
++static inline void blk_finish_plug(struct blk_plug *plug)
++{
++	if (plug != current->plug)
++		return;
++	blk_flush_plug_list(plug, false);
++
++	current->plug = NULL;
++}
++
++#else
++extern void blk_finish_plug(struct blk_plug *);
++extern void blk_start_plug(struct blk_plug *);
++#endif // _BLKDEV_H
++
+ static inline void blk_flush_plug(struct task_struct *tsk)
+ {
+ 	struct blk_plug *plug = tsk->plug;
+--- a/block/blk-core.c	2019-04-08 16:01:53.448086366 +0200
++++ b/block/blk-core.c	2019-04-08 16:40:16.844442667 +0200
+@@ -841,7 +841,12 @@
+ 	kmem_cache_free(request_cachep, element);
+ }
+ 
+-static void *alloc_request_size(gfp_t gfp_mask, void *data)
++#if !defined(CONFIG_APM821xx)
++static inline
++#else
++static
++#endif
++void *alloc_request_size(gfp_t gfp_mask, void *data)
+ {
+ 	struct request_queue *q = data;
+ 	struct request *rq;
+@@ -3588,6 +3593,8 @@
+  *   plug. By flushing the pending I/O when the process goes to sleep, we avoid
+  *   this kind of deadlock.
+  */
++
++#if !defined(CONFIG_APM821xx)
+ void blk_start_plug(struct blk_plug *plug)
+ {
+ 	struct task_struct *tsk = current;
+@@ -3608,6 +3615,7 @@
+ 	tsk->plug = plug;
+ }
+ EXPORT_SYMBOL(blk_start_plug);
++#endif
+ 
+ static int plug_rq_cmp(void *priv, struct list_head *a, struct list_head *b)
+ {
+@@ -3744,6 +3752,7 @@
+ 		queue_unplugged(q, depth, from_schedule);
+ }
+ 
++#if !defined(CONFIG_APM821xx)
+ void blk_finish_plug(struct blk_plug *plug)
+ {
+ 	if (plug != current->plug)
+@@ -3753,6 +3762,7 @@
+ 	current->plug = NULL;
+ }
+ EXPORT_SYMBOL(blk_finish_plug);
++#endif
+ 
+ #ifdef CONFIG_PM
+ /**
+--- a/block/blk-softirq.c	2019-03-30 13:36:09.851091251 +0100
++++ b/block/blk-softirq.c	2019-03-30 13:36:18.011473569 +0100
+@@ -95,7 +95,7 @@
+ 	return 0;
+ }
+ 
+-void __blk_complete_request(struct request *req)
++void inline __blk_complete_request(struct request *req)
+ {
+ 	int ccpu, cpu;
+ 	struct request_queue *q = req->q;
+--- a/block/bio.c	2019-04-06 11:05:34.209795057 +0200
++++ b/block/bio.c	2019-04-08 15:06:12.399826644 +0200
+@@ -178,6 +178,11 @@
+ 	}
+ }
+ 
++//#undef CONFIG_APM821xx
++#if defined(CONFIG_APM821xx)
++inline
++#endif
++
+ struct bio_vec *bvec_alloc(gfp_t gfp_mask, int nr, unsigned long *idx,
+ 			   mempool_t *pool)
+ {
+@@ -186,38 +191,44 @@
+ 	/*
+ 	 * see comment near bvec_array define!
+ 	 */
+-	switch (nr) {
+-	case 1:
+-		*idx = 0;
+-		break;
+-	case 2 ... 4:
+-		*idx = 1;
+-		break;
+-	case 5 ... 16:
+-		*idx = 2;
+-		break;
+-	case 17 ... 64:
+-		*idx = 3;
+-		break;
+-	case 65 ... 128:
+-		*idx = 4;
+-		break;
+-	case 129 ... BIO_MAX_PAGES:
+-		*idx = 5;
+-		break;
+-	default:
+-		return NULL;
+-	}
+ 
++    register int ix;
++#if defined(CONFIG_APM821xx)
++    ix = fls((nr - 1) <<  ((nr > 64) + 1 )) >> 1;
++    if (unlikely(nr > BIO_MAX_PAGES)) return NULL;    
++#else
++    switch (nr) {
++	    case 1:
++		    ix = 0;
++		    break;
++	    case 2 ... 4:
++		    ix = 1;
++		    break;
++	    case 5 ... 16:
++		    ix = 2;
++		    break;
++	    case 17 ... 64:
++		    ix = 3;
++		    break;
++	    case 65 ... 128:
++		    ix = 4;
++		    break;
++	    case 129 ... BIO_MAX_PAGES:
++		    ix = 5;
++		    break;
++	    default:
++		    return NULL;
++	}
++#endif 
+ 	/*
+ 	 * idx now points to the pool we want to allocate from. only the
+ 	 * 1-vec entry pool is mempool backed.
+ 	 */
+-	if (*idx == BVEC_POOL_MAX) {
++	if (ix == BVEC_POOL_MAX) {
+ fallback:
+ 		bvl = mempool_alloc(pool, gfp_mask);
+ 	} else {
+-		struct biovec_slab *bvs = bvec_slabs + *idx;
++		struct biovec_slab *bvs = bvec_slabs + ix;
+ 		gfp_t __gfp_mask = gfp_mask & ~(__GFP_DIRECT_RECLAIM | __GFP_IO);
+ 
+ 		/*
+@@ -233,16 +244,16 @@
+ 		 */
+ 		bvl = kmem_cache_alloc(bvs->slab, __gfp_mask);
+ 		if (unlikely(!bvl && (gfp_mask & __GFP_DIRECT_RECLAIM))) {
+-			*idx = BVEC_POOL_MAX;
++			ix = BVEC_POOL_MAX;
+ 			goto fallback;
+ 		}
+ 	}
+ 
+-	(*idx)++;
++	*idx = ++ix;
+ 	return bvl;
+ }
+ 
+-void bio_uninit(struct bio *bio)
++void __always_inline bio_uninit(struct bio *bio)
+ {
+ 	bio_disassociate_task(bio);
+ }
+@@ -276,6 +287,7 @@
+  * they must remember to pair any call to bio_init() with bio_uninit()
+  * when IO has completed, or when the bio is released.
+  */
++/* Moved to bio.h
+ void bio_init(struct bio *bio, struct bio_vec *table,
+ 	      unsigned short max_vecs)
+ {
+@@ -287,6 +299,7 @@
+ 	bio->bi_max_vecs = max_vecs;
+ }
+ EXPORT_SYMBOL(bio_init);
++*/
+ 
+ /**
+  * bio_reset - reinitialize a bio
+@@ -310,7 +323,7 @@
+ }
+ EXPORT_SYMBOL(bio_reset);
+ 
+-static struct bio *__bio_chain_endio(struct bio *bio)
++static __always_inline struct bio *__bio_chain_endio(struct bio *bio)
+ {
+ 	struct bio *parent = bio->bi_private;
+ 
+@@ -320,7 +333,7 @@
+ 	return parent;
+ }
+ 
+-static void bio_chain_endio(struct bio *bio)
++static __always_inline void bio_chain_endio(struct bio *bio)
+ {
+ 	bio_endio(__bio_chain_endio(bio));
+ }
+--- a/include/linux/bio.h	2019-04-06 11:05:15.092955865 +0200
++++ b/include/linux/bio.h	2019-04-06 18:30:28.309059262 +0200
+@@ -85,11 +85,12 @@
+  */
+ static inline bool bio_has_data(struct bio *bio)
+ {
+-	if (bio &&
++    unsigned int opf = bio_op(bio);
++	if (likely(bio &&
+ 	    bio->bi_iter.bi_size &&
+-	    bio_op(bio) != REQ_OP_DISCARD &&
+-	    bio_op(bio) != REQ_OP_SECURE_ERASE &&
+-	    bio_op(bio) != REQ_OP_WRITE_ZEROES)
++	    opf != REQ_OP_DISCARD &&
++	    opf != REQ_OP_SECURE_ERASE &&
++	    opf != REQ_OP_WRITE_ZEROES))
+ 		return true;
+ 
+ 	return false;
+@@ -97,10 +98,9 @@
+ 
+ static inline bool bio_no_advance_iter(struct bio *bio)
+ {
+-	return bio_op(bio) == REQ_OP_DISCARD ||
+-	       bio_op(bio) == REQ_OP_SECURE_ERASE ||
+-	       bio_op(bio) == REQ_OP_WRITE_SAME ||
+-	       bio_op(bio) == REQ_OP_WRITE_ZEROES;
++    unsigned int opf = bio_op(bio);
++	return opf == REQ_OP_DISCARD || bio_op(bio) == REQ_OP_SECURE_ERASE ||
++                 bio_op(bio) == REQ_OP_WRITE_SAME || bio_op(bio) == REQ_OP_WRITE_ZEROES;
+ }
+ 
+ static inline bool bio_mergeable(struct bio *bio)
+@@ -113,7 +113,7 @@
+ 
+ static inline unsigned int bio_cur_bytes(struct bio *bio)
+ {
+-	if (bio_has_data(bio))
++	if (likely(bio_has_data(bio)))
+ 		return bio_iovec(bio).bv_len;
+ 	else /* dataless requests such as discard */
+ 		return bio->bi_iter.bi_size;
+@@ -121,7 +121,7 @@
+ 
+ static inline void *bio_data(struct bio *bio)
+ {
+-	if (bio_has_data(bio))
++	if (likely(bio_has_data(bio)))
+ 		return page_address(bio_page(bio)) + bio_offset(bio);
+ 
+ 	return NULL;
+@@ -464,8 +464,16 @@
+ extern int submit_bio_wait(struct bio *bio);
+ extern void bio_advance(struct bio *, unsigned);
+ 
+-extern void bio_init(struct bio *bio, struct bio_vec *table,
+-		     unsigned short max_vecs);
++static inline void bio_init(struct bio *bio, struct bio_vec *table, unsigned short max_vecs)
++{
++	memset(bio, 0, sizeof(*bio));
++	atomic_set(&bio->__bi_remaining, 1);
++	atomic_set(&bio->__bi_cnt, 1);
++
++	bio->bi_io_vec = table;
++	bio->bi_max_vecs = max_vecs;
++}
++
+ extern void bio_uninit(struct bio *);
+ extern void bio_reset(struct bio *);
+ void bio_chain(struct bio *, struct bio *);

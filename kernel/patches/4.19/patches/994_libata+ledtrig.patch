@@ -1,0 +1,633 @@
+--- a/drivers/ata/Kconfig	2019-04-07 12:39:24.222774133 +0200
++++ b/drivers/ata/Kconfig	2019-04-07 12:39:27.246895691 +0200
+@@ -46,6 +46,22 @@
+ 
+ 	  If unsure, say Y.
+ 
++config ARCH_WANT_LIBATA_LEDS
++	bool
++
++config ATA_LEDS
++	bool "support ATA port LED triggers"
++	depends on ARCH_WANT_LIBATA_LEDS
++	select NEW_LEDS
++	select LEDS_CLASS
++	select LEDS_TRIGGERS
++	default y
++	help
++	  This option adds a LED trigger for each registered ATA port.
++	  It is used to drive disk activity leds connected via GPIO.
++
++	  If unsure, say N.
++
+ config ATA_ACPI
+ 	bool "ATA ACPI Support"
+ 	depends on ACPI
+--- a/drivers/ata/libata-core.c	2019-04-03 06:26:31.000000000 +0200
++++ b/drivers/ata/libata-core.c	2019-04-08 12:33:48.048443049 +0200
+@@ -72,6 +72,7 @@
+ #include <linux/leds.h>
+ #include <linux/pm_runtime.h>
+ #include <linux/platform_device.h>
++#include <asm/ppc4xx_ocm.h>
+ 
+ #define CREATE_TRACE_POINTS
+ #include <trace/events/libata.h>
+@@ -79,6 +80,11 @@
+ #include "libata.h"
+ #include "libata-transport.h"
+ 
++#if defined(CONFIG_APM821xx)
++#define ALLOCATE_ATA_HOST_ON_OCM
++#define ALLOCATE_ATA_PORT_ON_OCM
++#endif 
++
+ /* debounce timing parameters in msecs { interval, duration, timeout } */
+ const unsigned long sata_deb_timing_normal[]		= {   5,  100, 2000 };
+ const unsigned long sata_deb_timing_hotplug[]		= {  25,  500, 2000 };
+@@ -731,6 +737,19 @@
+ 	return block;
+ }
+ 
++#ifdef CONFIG_ATA_LEDS
++#define LIBATA_BLINK_DELAY 20 /* ms */
++static inline void ata_led_act(struct ata_port *ap)
++{
++	unsigned long led_delay = LIBATA_BLINK_DELAY;
++
++	if (unlikely(!ap->ledtrig))
++		return;
++
++	led_trigger_blink_oneshot(ap->ledtrig, &led_delay, &led_delay, 0);
++}
++#endif
++
+ /**
+  *	ata_build_rw_tf - Build ATA taskfile for given read/write request
+  *	@tf: Target ATA taskfile
+@@ -4985,10 +5004,10 @@
+ 	struct ata_link *link = qc->dev->link;
+ 
+ 	if (ata_is_ncq(qc->tf.protocol)) {
+-		if (!ata_tag_valid(link->active_tag))
++		if (unlikely(!ata_tag_valid(link->active_tag)))
+ 			return 0;
+ 	} else {
+-		if (!ata_tag_valid(link->active_tag) && !link->sactive)
++		if (unlikely(!ata_tag_valid(link->active_tag) && !link->sactive))
+ 			return 0;
+ 	}
+ 
+@@ -5108,42 +5127,6 @@
+ }
+ 
+ /**
+- *	ata_qc_new_init - Request an available ATA command, and initialize it
+- *	@dev: Device from whom we request an available command structure
+- *	@tag: tag
+- *
+- *	LOCKING:
+- *	None.
+- */
+-
+-struct ata_queued_cmd *ata_qc_new_init(struct ata_device *dev, int tag)
+-{
+-	struct ata_port *ap = dev->link->ap;
+-	struct ata_queued_cmd *qc;
+-
+-	/* no command while frozen */
+-	if (unlikely(ap->pflags & ATA_PFLAG_FROZEN))
+-		return NULL;
+-
+-	/* libsas case */
+-	if (ap->flags & ATA_FLAG_SAS_HOST) {
+-		tag = ata_sas_allocate_tag(ap);
+-		if (tag < 0)
+-			return NULL;
+-	}
+-
+-	qc = __ata_qc_from_tag(ap, tag);
+-	qc->tag = qc->hw_tag = tag;
+-	qc->scsicmd = NULL;
+-	qc->ap = ap;
+-	qc->dev = dev;
+-
+-	ata_qc_reinit(qc);
+-
+-	return qc;
+-}
+-
+-/**
+  *	ata_qc_free - free unused ata_queued_cmd
+  *	@qc: Command to complete
+  *
+@@ -5163,22 +5146,20 @@
+ 
+ 	qc->flags = 0;
+ 	tag = qc->tag;
+-	if (ata_tag_valid(tag)) {
++	if (likely(ata_tag_valid(tag))) {
+ 		qc->tag = ATA_TAG_POISON;
+ 		if (ap->flags & ATA_FLAG_SAS_HOST)
+ 			ata_sas_free_tag(tag, ap);
+ 	}
+ }
+ 
+-void __ata_qc_complete(struct ata_queued_cmd *qc)
++void __ata_qc_complete(struct ata_port *ap, struct ata_queued_cmd *qc)
+ {
+-	struct ata_port *ap;
+-	struct ata_link *link;
++	struct ata_link *link = qc->dev->link;
+ 
+-	WARN_ON_ONCE(qc == NULL); /* ata_qc_from_tag _might_ return NULL */
++    	// every single call to __ata_qc_complete has checked qc
++	//WARN_ON_ONCE(qc == NULL); /* ata_qc_from_tag _might_ return NULL */
+ 	WARN_ON_ONCE(!(qc->flags & ATA_QCFLAG_ACTIVE));
+-	ap = qc->ap;
+-	link = qc->dev->link;
+ 
+ 	if (likely(qc->flags & ATA_QCFLAG_DMAMAP))
+ 		ata_sg_clean(qc);
+@@ -5186,16 +5167,14 @@
+ 	/* command should be marked inactive atomically with qc completion */
+ 	if (ata_is_ncq(qc->tf.protocol)) {
+ 		link->sactive &= ~(1 << qc->hw_tag);
+-		if (!link->sactive)
+-			ap->nr_active_links--;
++		if (!link->sactive) ap->nr_active_links--;
+ 	} else {
+ 		link->active_tag = ATA_TAG_POISON;
+ 		ap->nr_active_links--;
+ 	}
+ 
+ 	/* clear exclusive status */
+-	if (unlikely(qc->flags & ATA_QCFLAG_CLEAR_EXCL &&
+-		     ap->excl_link == link))
++	if (unlikely(qc->flags & ATA_QCFLAG_CLEAR_EXCL && ap->excl_link == link))
+ 		ap->excl_link = NULL;
+ 
+ 	/* atapi: mark qc as inactive to prevent the interrupt handler
+@@ -5265,7 +5244,7 @@
+ 	 * not synchronize with interrupt handler.  Only PIO task is
+ 	 * taken care of.
+ 	 */
+-	if (ap->ops->error_handler) {
++	if (likely(ap->ops->error_handler)) {
+ 		struct ata_device *dev = qc->dev;
+ 		struct ata_eh_info *ehi = &dev->link->eh_info;
+ 
+@@ -5279,8 +5258,7 @@
+ 		if (unlikely(ata_tag_internal(qc->tag))) {
+ 			fill_result_tf(qc);
+ 			trace_ata_qc_complete_internal(qc);
+-			__ata_qc_complete(qc);
+-			return;
++			goto ATA_QC_COMPLETE;
+ 		}
+ 
+ 		/*
+@@ -5327,7 +5305,6 @@
+ 		if (unlikely(dev->flags & ATA_DFLAG_DUBIOUS_XFER))
+ 			ata_verify_xfer(qc);
+ 
+-		__ata_qc_complete(qc);
+ 	} else {
+ 		if (qc->flags & ATA_QCFLAG_EH_SCHEDULED)
+ 			return;
+@@ -5336,8 +5313,9 @@
+ 		if (qc->err_mask || qc->flags & ATA_QCFLAG_RESULT_TF)
+ 			fill_result_tf(qc);
+ 
+-		__ata_qc_complete(qc);
+ 	}
++ATA_QC_COMPLETE:
++	__ata_qc_complete(ap, qc);
+ }
+ 
+ /**
+@@ -6003,8 +5981,16 @@
+ 	struct ata_port *ap;
+ 
+ 	DPRINTK("ENTER\n");
+-
++	
++#if defined(ALLOCATE_ATA_PORT_ON_OCM)
++	{
++		phys_addr_t phys;
++		ap = ppc4xx_ocm_alloc(&phys, sizeof(*ap), 4, PPC4XX_OCM_NON_CACHED, "ata_port");
++		if (ap) memset(ap, 0, sizeof(*ap));
++	}
++#else
+ 	ap = kzalloc(sizeof(*ap), GFP_KERNEL);
++#endif
+ 	if (!ap)
+ 		return NULL;
+ 
+@@ -6041,6 +6027,9 @@
+ 	ap->stats.unhandled_irq = 1;
+ 	ap->stats.idle_irq = 1;
+ #endif
++#ifdef CONFIG_ATA_LEDS
++	ap->ledtrig = kzalloc(sizeof(struct led_trigger), GFP_KERNEL);
++#endif
+ 	ata_sff_port_init(ap);
+ 
+ 	return ap;
+@@ -6076,10 +6065,26 @@
+ 
+ 		kfree(ap->pmp_link);
+ 		kfree(ap->slave_link);
++#ifdef CONFIG_ATA_LEDS
++		if (ap->ledtrig) {
++			led_trigger_unregister(ap->ledtrig);
++			kfree(ap->ledtrig);
++		};
++#endif
++		host->ports[i] = NULL;
++		
++#if defined(ALLOCATE_ATA_PORT_ON_OCM)
++		ppc4xx_ocm_free(ap);
++#else
+ 		kfree(ap);
+ 		host->ports[i] = NULL;
++#endif
+ 	}
++#if defined (ALLOCATE_ATA_HOST_ON_OCM)
++	ppc4xx_ocm_free(host);
++#else
+ 	kfree(host);
++#endif
+ }
+ 
+ void ata_host_get(struct ata_host *host)
+@@ -6123,7 +6128,16 @@
+ 
+ 	/* alloc a container for our list of ATA ports (buses) */
+ 	sz = sizeof(struct ata_host) + (max_ports + 1) * sizeof(void *);
++
++#if defined(ALLOCATE_ATA_HOST_ON_OCM)
++	{
++		phys_addr_t phys;
++		host = ppc4xx_ocm_alloc(&phys, sz, 4, PPC4XX_OCM_NON_CACHED, "ata_host");
++		if (host) memset(host, 0, sz);
++	}
++#else
+ 	host = kzalloc(sz, GFP_KERNEL);
++#endif
+ 	if (!host)
+ 		return NULL;
+ 
+@@ -6161,7 +6175,12 @@
+  err_out:
+ 	devres_release_group(dev, NULL);
+  err_free:
++	
++#if defined(ALLOCATE_ATA_HOST_ON_OCM)
++	ppc4xx_ocm_free(host);
++#else
+ 	kfree(host);
++#endif
+ 	return NULL;
+ }
+ 
+@@ -6539,7 +6558,23 @@
+ 		host->ports[i]->print_id = atomic_inc_return(&ata_print_id);
+ 		host->ports[i]->local_port_no = i + 1;
+ 	}
++#ifdef CONFIG_ATA_LEDS
++	for (i = 0; i < host->n_ports; i++) {
++		if (unlikely(!host->ports[i]->ledtrig))
++			continue;
+ 
++		snprintf(host->ports[i]->ledtrig_name,
++			sizeof(host->ports[i]->ledtrig_name), "ata%u",
++			host->ports[i]->print_id);
++
++		host->ports[i]->ledtrig->name = host->ports[i]->ledtrig_name;
++
++		if (led_trigger_register(host->ports[i]->ledtrig)) {
++			kfree(host->ports[i]->ledtrig);
++			host->ports[i]->ledtrig = NULL;
++		}
++	}
++#endif
+ 	/* Create associated sysfs transport objects  */
+ 	for (i = 0; i < host->n_ports; i++) {
+ 		rc = ata_tport_add(host->dev,host->ports[i]);
+--- a/drivers/ata/libata-eh.c	2019-04-07 12:39:17.278495250 +0200
++++ b/drivers/ata/libata-eh.c	2019-04-07 12:39:27.246895691 +0200
+@@ -1245,7 +1245,7 @@
+ 
+ 	spin_lock_irqsave(ap->lock, flags);
+ 	qc->scsidone = ata_eh_scsidone;
+-	__ata_qc_complete(qc);
++	__ata_qc_complete(ap, qc);
+ 	WARN_ON(ata_tag_valid(qc->tag));
+ 	spin_unlock_irqrestore(ap->lock, flags);
+ 
+--- a/drivers/ata/libata.h	2019-04-07 12:39:11.902279577 +0200
++++ b/drivers/ata/libata.h	2019-04-07 12:48:28.033301876 +0200
+@@ -56,7 +56,6 @@
+ extern void ata_force_cbl(struct ata_port *ap);
+ extern u64 ata_tf_to_lba(const struct ata_taskfile *tf);
+ extern u64 ata_tf_to_lba48(const struct ata_taskfile *tf);
+-extern struct ata_queued_cmd *ata_qc_new_init(struct ata_device *dev, int tag);
+ extern int ata_build_rw_tf(struct ata_taskfile *tf, struct ata_device *dev,
+ 			   u64 block, u32 n_block, unsigned int tf_flags,
+ 			   unsigned int tag, int class);
+@@ -84,7 +83,7 @@
+ 					u8 enable, u8 feature);
+ extern void ata_qc_free(struct ata_queued_cmd *qc);
+ extern void ata_qc_issue(struct ata_queued_cmd *qc);
+-extern void __ata_qc_complete(struct ata_queued_cmd *qc);
++extern void __ata_qc_complete(struct ata_port *ap, struct ata_queued_cmd *qc);
+ extern int atapi_check_dma(struct ata_queued_cmd *qc);
+ extern void swap_buf_le16(u16 *buf, unsigned int buf_words);
+ extern bool ata_phys_link_online(struct ata_link *link);
+--- a/drivers/ata/libata-scsi.c	2019-04-07 12:49:52.848833720 +0200
++++ b/drivers/ata/libata-scsi.c	2019-04-08 12:10:35.477709098 +0200
+@@ -64,8 +64,8 @@
+ 
+ static struct ata_device *__ata_scsi_find_dev(struct ata_port *ap,
+ 					const struct scsi_device *scsidev);
+-static struct ata_device *ata_scsi_find_dev(struct ata_port *ap,
+-					    const struct scsi_device *scsidev);
++//static struct ata_device *ata_scsi_find_dev(struct ata_port *ap, const struct scsi_device *scsidev);
++#define ata_scsi_find_dev(ap,scsidev) (__ata_scsi_find_dev(ap, scsidev))
+ 
+ #define RW_RECOVERY_MPAGE 0x1
+ #define RW_RECOVERY_MPAGE_LEN 12
+@@ -837,6 +837,42 @@
+ EXPORT_SYMBOL_GPL(ata_scsi_ioctl);
+ 
+ /**
++ *	ata_qc_new_init - Request an available ATA command, and initialize it
++ *	@dev: Device from whom we request an available command structure
++ *	@tag: tag
++ *
++ *	LOCKING:
++ *	None.
++ */
++
++struct ata_queued_cmd *ata_qc_new_init(struct ata_device *dev, int tag)
++{
++	struct ata_port *ap = dev->link->ap;
++	struct ata_queued_cmd *qc;
++
++	/* no command while frozen */
++	if (unlikely(ap->pflags & ATA_PFLAG_FROZEN))
++		return NULL;
++
++	/* libsas case */
++	if (ap->flags & ATA_FLAG_SAS_HOST) {
++		tag = ata_sas_allocate_tag(ap);
++		if (tag < 0)
++			return NULL;
++	}
++
++	qc = __ata_qc_from_tag(ap, tag);
++	qc->tag = qc->hw_tag = tag;
++	qc->scsicmd = NULL;
++	qc->ap = ap;
++	qc->dev = dev;
++
++	ata_qc_reinit(qc);
++
++	return qc;
++}
++
++/**
+  *	ata_scsi_qc_new - acquire new ata_queued_cmd reference
+  *	@dev: ATA device to which the new command is attached
+  *	@cmd: SCSI command that originated this ATA command
+@@ -3062,9 +3062,9 @@
+ 	return 0;
+ }
+ 
+-static struct ata_device *ata_find_dev(struct ata_port *ap, int devno)
++static __always_inline struct ata_device *ata_find_dev(struct ata_port *ap, int devno)
+ {
+-	if (!sata_pmp_attached(ap)) {
++	if (likely(sata_pmp_not_attached(ap))) {
+ 		if (likely(devno >= 0 &&
+ 			   devno < ata_link_max_devices(&ap->link)))
+ 			return &ap->link.device[devno];
+@@ -3083,17 +3083,20 @@
+ 	int devno;
+ 
+ 	/* skip commands not addressed to targets we simulate */
+-	if (!sata_pmp_attached(ap)) {
++	if (likely(sata_pmp_not_attached(ap))) {
+ 		if (unlikely(scsidev->channel || scsidev->lun))
+ 			return NULL;
+-		devno = scsidev->id;
++        devno = scsidev->id;
++        if (likely(devno >= 0 && devno < ata_link_max_devices(&ap->link)))
++			return &ap->link.device[devno];
+ 	} else {
+ 		if (unlikely(scsidev->id || scsidev->lun))
+ 			return NULL;
+ 		devno = scsidev->channel;
++		if (likely(devno >= 0 && devno < ap->nr_pmp_links))
++			return &ap->pmp_link[devno].device[0];
+ 	}
+-
+-	return ata_find_dev(ap, devno);
++	return NULL;
+ }
+ 
+ /**
+@@ -3112,6 +3115,8 @@
+  *	RETURNS:
+  *	Associated ATA device, or %NULL if not found.
+  */
++
++/*
+ static struct ata_device *
+ ata_scsi_find_dev(struct ata_port *ap, const struct scsi_device *scsidev)
+ {
+@@ -3122,6 +3127,7 @@
+ 
+ 	return dev;
+ }
++*/
+ 
+ /*
+  *	ata_scsi_map_proto - Map pass-thru protocol value to taskfile value.
+@@ -3156,10 +3162,8 @@
+ 	case 7:		/* DMA Queued */
+ 	case 15:	/* Return Response Info */
+ 	default:	/* Reserved */
+-		break;
++		return ATA_PROT_UNKNOWN;
+ 	}
+-
+-	return ATA_PROT_UNKNOWN;
+ }
+ 
+ /**
+@@ -4322,27 +4326,28 @@
+  *	Prints the contents of a SCSI command via printk().
+  */
+ 
+-static inline void ata_scsi_dump_cdb(struct ata_port *ap,
+-				     struct scsi_cmnd *cmd)
+-{
+ #ifdef ATA_VERBOSE_DEBUG
++static inline void ata_scsi_dump_cdb(struct ata_port *ap, struct scsi_cmnd *cmd)
++{
++
+ 	struct scsi_device *scsidev = cmd->device;
+ 
+ 	VPRINTK("CDB (%u:%d,%d,%lld) %9ph\n",
+ 		ap->print_id,
+ 		scsidev->channel, scsidev->id, scsidev->lun,
+ 		cmd->cmnd);
+-#endif
+ }
++#else
++#define ata_scsi_dump_cdb(ap,cmd)
++#endif
+ 
+ static inline int __ata_scsi_queuecmd(struct scsi_cmnd *scmd,
+ 				      struct ata_device *dev)
+ {
+ 	u8 scsi_op = scmd->cmnd[0];
+ 	ata_xlat_func_t xlat_func;
+-	int rc = 0;
+-
+-	if (dev->class == ATA_DEV_ATA || dev->class == ATA_DEV_ZAC) {
++    
++	if ((dev->class == ATA_DEV_ATA) || dev->class == ATA_DEV_ZAC) {
+ 		if (unlikely(!scmd->cmd_len || scmd->cmd_len > dev->cdb_len))
+ 			goto bad_cdb_len;
+ 
+@@ -4370,12 +4375,10 @@
+ 		}
+ 	}
+ 
+-	if (xlat_func)
+-		rc = ata_scsi_translate(dev, scmd, xlat_func);
+-	else
+-		ata_scsi_simulate(dev, scmd);
+-
+-	return rc;
++	if (likely(xlat_func))
++		return ata_scsi_translate(dev, scmd, xlat_func);
++	ata_scsi_simulate(dev, scmd);
++	return 0;
+ 
+  bad_cdb_len:
+ 	DPRINTK("bad CDB len=%u, scsi_op=0x%02x, max=%u\n",
+
+--- a/include/linux/libata.h	2019-04-07 14:40:27.534945700 +0200
++++ b/include/linux/libata.h	2019-04-08 14:55:52.492091506 +0200
+@@ -38,6 +38,9 @@
+ #include <linux/acpi.h>
+ #include <linux/cdrom.h>
+ #include <linux/sched.h>
++#ifdef CONFIG_ATA_LEDS
++#include <linux/leds.h>
++#endif
+ 
+ /*
+  * Define if arch has non-standard setup.  This is a _PCI_ standard
+@@ -893,6 +896,12 @@
+ #ifdef CONFIG_ATA_ACPI
+ 	struct ata_acpi_gtm	__acpi_init_gtm; /* use ata_acpi_init_gtm() */
+ #endif
++
++#ifdef CONFIG_ATA_LEDS
++	struct led_trigger	*ledtrig;
++	char			ledtrig_name[8];
++#endif
++
+ 	/* owned by EH */
+ 	u8			sector_buf[ATA_SECT_SIZE] ____cacheline_aligned;
+ };
+@@ -1381,6 +1390,7 @@
+ 	return ap->flags & ATA_FLAG_PMP;
+ }
+ 
++#define sata_pmp_not_attached(ap) ((ap)->nr_pmp_links == 0)
+ static inline bool sata_pmp_attached(struct ata_port *ap)
+ {
+ 	return ap->nr_pmp_links != 0;
+@@ -1395,7 +1405,7 @@
+ {
+ 	return false;
+ }
+-
++#define sata_pmp_not_attached(ap) true
+ static inline bool sata_pmp_attached(struct ata_port *ap)
+ {
+ 	return false;
+@@ -1494,10 +1504,17 @@
+ 	return tag == ATA_TAG_INTERNAL;
+ }
+ 
++/* Somehow this macro creates code optimization issues...
++#if defined(CONFIG_APM821xx)
++#define ata_tag_valid(tag) ({ typeof(tag) _tag = (tag); \
++	(_tag < ATA_MAX_QUEUE || _tag == ATA_TAG_INTERNAL); })
++#else
++*/
+ static inline bool ata_tag_valid(unsigned int tag)
+ {
+ 	return tag < ATA_MAX_QUEUE || ata_tag_internal(tag);
+ }
++//#endif
+ 
+ #define __ata_qc_for_each(ap, qc, tag, max_tag, fn)		\
+ 	for ((tag) = 0; (tag) < (max_tag) &&			\
+@@ -1562,6 +1579,15 @@
+ /*
+  * link helpers
+  */
++
++#if defined(CONFIG_APM821xx)
++#define ata_link_max_devices(link) ({ typeof(link) _l = (link); \
++	(ata_is_host_link(_l) && _l->ap->flags & ATA_FLAG_SLAVE_POSS) ? 2 : 1; })
++
++#define ata_link_active(link) ({ typeof(link) _l = (link); \
++	(ata_tag_valid(_l->active_tag) || _l->sactive); })
++#else
++
+ static inline int ata_link_max_devices(const struct ata_link *link)
+ {
+ 	if (ata_is_host_link(link) && link->ap->flags & ATA_FLAG_SLAVE_POSS)
+@@ -1573,6 +1599,7 @@
+ {
+ 	return ata_tag_valid(link->active_tag) || link->sactive;
+ }
++#endif
+ 
+ /*
+  * Iterators
+@@ -1679,6 +1706,16 @@
+ 	qc->tf.ctl |= ATA_NIEN;
+ }
+ 
++#if defined(CONFIG_APM821xx)
++#define __ata_qc_from_tag(ap, tag) ({ typeof(tag) _tag = (tag); \
++	(ata_tag_valid(_tag) ? &(ap)->qcmd[_tag] : NULL); })
++
++#define ata_qc_from_tag(ap, tag) ({ typeof(tag) _tag = (tag); typeof(ap) _ap = (ap); \
++	(ata_tag_valid(_tag) && \
++        (_ap->qcmd[_tag].flags & (ATA_QCFLAG_ACTIVE | ATA_QCFLAG_FAILED)) == ATA_QCFLAG_ACTIVE) ? \
++        &_ap->qcmd[_tag] : (struct ata_queued_cmd *) NULL; })
++
++#else
+ static inline struct ata_queued_cmd *__ata_qc_from_tag(struct ata_port *ap,
+ 						       unsigned int tag)
+ {
+@@ -1701,6 +1738,7 @@
+ 
+ 	return NULL;
+ }
++#endif
+ 
+ static inline unsigned int ata_qc_raw_nbytes(struct ata_queued_cmd *qc)
+ {
+

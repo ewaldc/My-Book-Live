@@ -1,0 +1,312 @@
+--- a/net/ipv4/tcp.c	2019-04-03 06:26:31.000000000 +0200
++++ b/net/ipv4/tcp.c	2019-04-06 22:02:51.284704988 +0200
+@@ -899,39 +899,28 @@
+ 	return NULL;
+ }
+ 
+-static unsigned int tcp_xmit_size_goal(struct sock *sk, u32 mss_now,
+-				       int large_allowed)
++
++static int tcp_send_mss(struct sock *sk, int *size_goal, int flags)
+ {
++	u32 mss_now = tcp_current_mss(sk);
++	u32 new_sz_goal, sz_goal;
+ 	struct tcp_sock *tp = tcp_sk(sk);
+-	u32 new_size_goal, size_goal;
+ 
+-	if (!large_allowed)
+-		return mss_now;
++    if (unlikely(flags & MSG_OOB)) return *size_goal = mss_now;
+ 
+ 	/* Note : tcp_tso_autosize() will eventually split this later */
+-	new_size_goal = sk->sk_gso_max_size - 1 - MAX_TCP_HEADER;
+-	new_size_goal = tcp_bound_to_half_wnd(tp, new_size_goal);
++	new_sz_goal = sk->sk_gso_max_size - 1 - MAX_TCP_HEADER;
++    // For a NAS on a LAN -> not needed
++	//new_sz_goal = tcp_bound_to_half_wnd(tp, new_sz_goal);
+ 
+ 	/* We try hard to avoid divides here */
+-	size_goal = tp->gso_segs * mss_now;
+-	if (unlikely(new_size_goal < size_goal ||
+-		     new_size_goal >= size_goal + mss_now)) {
+-		tp->gso_segs = min_t(u16, new_size_goal / mss_now,
+-				     sk->sk_gso_max_segs);
+-		size_goal = tp->gso_segs * mss_now;
++	sz_goal = tp->gso_segs * mss_now;
++	if (unlikely(new_sz_goal < sz_goal || new_sz_goal >= sz_goal + mss_now)) {
++		tp->gso_segs = min_t(u16, new_sz_goal / mss_now, sk->sk_gso_max_segs);
++		sz_goal = tp->gso_segs * mss_now;
+ 	}
+-
+-	return max(size_goal, mss_now);
+-}
+-
+-static int tcp_send_mss(struct sock *sk, int *size_goal, int flags)
+-{
+-	int mss_now;
+-
+-	mss_now = tcp_current_mss(sk);
+-	*size_goal = tcp_xmit_size_goal(sk, mss_now, !(flags & MSG_OOB));
+-
+-	return mss_now;
++	*size_goal = (likely(sz_goal >= mss_now)) ? sz_goal : mss_now;
++    return mss_now;
+ }
+ 
+ ssize_t do_tcp_sendpages(struct sock *sk, struct page *page, int offset,
+--- a/net/ipv4/tcp_output.c	2019-04-06 18:48:53.682547689 +0200
++++ b/net/ipv4/tcp_output.c	2019-04-07 12:21:34.761053973 +0200
+@@ -996,7 +996,7 @@
+ 	sock_hold(sk);
+ }
+ 
+-static void tcp_update_skb_after_send(struct tcp_sock *tp, struct sk_buff *skb)
++static inline void tcp_update_skb_after_send(struct tcp_sock *tp, struct sk_buff *skb)
+ {
+ 	skb->skb_mstamp = tp->tcp_mstamp;
+ 	list_move_tail(&skb->tcp_tsorted_anchor, &tp->tsorted_sent_queue);
+@@ -1654,12 +1654,14 @@
+ }
+ 
+ /* Minshall's variant of the Nagle send check. */
++#define tcp_minshall_check(tp) (after(tp->snd_sml, tp->snd_una) && !after(tp->snd_sml, tp->snd_nxt))
++/*
+ static bool tcp_minshall_check(const struct tcp_sock *tp)
+ {
+-	return after(tp->snd_sml, tp->snd_una) &&
++     return after(tp->snd_sml, tp->snd_una) &&
+ 		!after(tp->snd_sml, tp->snd_nxt);
+ }
+-
++*/
+ /* Update snd_sml if this skb is under mss
+  * Note that a TSO packet might end with a sub-mss segment
+  * The test is really :
+@@ -1682,23 +1684,28 @@
+  * 4. Or TCP_CORK is not set, and all sent packets are ACKed.
+  *    With Minshall's modification: all sent small packets are ACKed.
+  */
+-static bool tcp_nagle_check(bool partial, const struct tcp_sock *tp,
++#define tcp_nagle_check(prt, tp, nonagle) ((prt) && (((nonagle) & TCP_NAGLE_CORK) || \
++		 (!(nonagle) && (tp)->packets_out && tcp_minshall_check(tp))))
++/*
++static inline bool tcp_nagle_check(bool partial, const struct tcp_sock *tp,
+ 			    int nonagle)
+ {
+ 	return partial &&
+ 		((nonagle & TCP_NAGLE_CORK) ||
+ 		 (!nonagle && tp->packets_out && tcp_minshall_check(tp)));
+ }
++*/
+ 
++#define minl(x,y) ({ typeof(x) _x = (x); typeof(y) _y = (y);	\
++	(void) (&_x == &_y); likely(_x < _y) ? _x : _y; })
+ /* Return how many segs we'd like on a TSO packet,
+  * to send one TSO packet per ms
+  */
+-static u32 tcp_tso_autosize(const struct sock *sk, unsigned int mss_now,
++static inline u32 tcp_tso_autosize(const struct sock *sk, unsigned int mss_now,
+ 			    int min_tso_segs)
+ {
+-	u32 bytes, segs;
+-
+-	bytes = min(sk->sk_pacing_rate >> sk->sk_pacing_shift,
++	u32 bytes;
++	bytes = minl(sk->sk_pacing_rate >> sk->sk_pacing_shift,
+ 		    sk->sk_gso_max_size - 1 - MAX_TCP_HEADER);
+ 
+ 	/* Goal is to send at least one packet per ms,
+@@ -1706,9 +1713,7 @@
+ 	 * This preserves ACK clocking and is consistent
+ 	 * with tcp_tso_should_defer() heuristic.
+ 	 */
+-	segs = max_t(u32, bytes / mss_now, min_tso_segs);
+-
+-	return segs;
++ 	return max_t(u32, bytes / mss_now, min_tso_segs);
+ }
+ 
+ /* Return the number of segments we want in the skb we are transmitting.
+@@ -1718,23 +1723,19 @@
+ {
+ 	const struct tcp_congestion_ops *ca_ops = inet_csk(sk)->icsk_ca_ops;
+ 	u32 min_tso, tso_segs;
+-
+-	min_tso = ca_ops->min_tso_segs ?
+-			ca_ops->min_tso_segs(sk) :
+-			sock_net(sk)->ipv4.sysctl_tcp_min_tso_segs;
++	min_tso = (unlikely(ca_ops->min_tso_segs)) ?
++			ca_ops->min_tso_segs(sk) : sock_net(sk)->ipv4.sysctl_tcp_min_tso_segs;
+ 
+ 	tso_segs = tcp_tso_autosize(sk, mss_now, min_tso);
+-	return min_t(u32, tso_segs, sk->sk_gso_max_segs);
++	return (likely(tso_segs <= sk->sk_gso_max_segs)) ? tso_segs : sk->sk_gso_max_segs;
+ }
+ 
+ /* Returns the portion of skb which can be sent right away */
+-static unsigned int tcp_mss_split_point(const struct sock *sk,
+-					const struct sk_buff *skb,
+-					unsigned int mss_now,
+-					unsigned int max_segs,
+-					int nonagle)
++static __always_inline unsigned int tcp_mss_split_point(const struct sock *sk,
++	const struct sk_buff *skb, unsigned int mss_now, unsigned int max_segs,
++	int nonagle, const struct tcp_sock *tp)
+ {
+-	const struct tcp_sock *tp = tcp_sk(sk);
++	//const struct tcp_sock *tp = tcp_sk(sk);
+ 	u32 partial, needed, window, max_len;
+ 
+ 	window = tcp_wnd_end(tp) - TCP_SKB_CB(skb)->seq;
+@@ -2050,10 +2051,11 @@
+  *         1 if a probe was sent,
+  *         -1 otherwise
+  */
+-static int tcp_mtu_probe(struct sock *sk)
++
++static int _tcp_mtu_probe(struct sock *sk, struct tcp_sock *tp)
+ {
+ 	struct inet_connection_sock *icsk = inet_csk(sk);
+-	struct tcp_sock *tp = tcp_sk(sk);
++	//struct tcp_sock *tp = tcp_sk(sk);
+ 	struct sk_buff *skb, *nskb, *next;
+ 	struct net *net = sock_net(sk);
+ 	int probe_size;
+@@ -2066,13 +2068,13 @@
+ 	 * not in recovery,
+ 	 * have enough cwnd, and
+ 	 * not SACKing (the variable headers throw things off)
+-	 */
+ 	if (likely(!icsk->icsk_mtup.enabled ||
+ 		   icsk->icsk_mtup.probe_size ||
+ 		   inet_csk(sk)->icsk_ca_state != TCP_CA_Open ||
+ 		   tp->snd_cwnd < 11 ||
+ 		   tp->rx_opt.num_sacks || tp->rx_opt.dsack))
+ 		return -1;
++	 */
+ 
+ 	/* Use binary search for probe_size between tcp_mss_base,
+ 	 * and current mss_clamp. if (search_high - search_low)
+@@ -2187,12 +2189,26 @@
+ 
+ 	return -1;
+ }
++static __always_inline int tcp_mtu_probe(struct sock *sk, struct tcp_sock *tp)
++{
++	struct inet_connection_sock *icsk = inet_csk(sk);
++	if (likely(!icsk->icsk_mtup.enabled || icsk->icsk_mtup.probe_size ||
++		   inet_csk(sk)->icsk_ca_state != TCP_CA_Open || tp->snd_cwnd < 11 ||
++		   tp->rx_opt.num_sacks || tp->rx_opt.dsack))
++		return -1;
++    return _tcp_mtu_probe(sk,tp);
+ 
++} 
++
++#define tcp_pacing_check(sk) (tcp_needs_internal_pacing(sk) && \
++	       hrtimer_is_queued(&tcp_sk(sk)->pacing_timer))
++/*
+ static bool tcp_pacing_check(const struct sock *sk)
+ {
+ 	return tcp_needs_internal_pacing(sk) &&
+ 	       hrtimer_is_queued(&tcp_sk(sk)->pacing_timer);
+ }
++*/
+ 
+ /* TCP Small Queues :
+  * Control number of packets in qdisc/devices to two packets / or ~1 ms.
+@@ -2295,8 +2311,8 @@
+ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
+ 			   int push_one, gfp_t gfp)
+ {
+-	struct tcp_sock *tp = tcp_sk(sk);
+-	struct sk_buff *skb;
++	register struct tcp_sock *tp = tcp_sk(sk);
++	register struct sk_buff *skb;
+ 	unsigned int tso_segs, sent_pkts;
+ 	int cwnd_quota;
+ 	int result;
+@@ -2308,7 +2324,7 @@
+ 	tcp_mstamp_refresh(tp);
+ 	if (!push_one) {
+ 		/* Do MTU probing. */
+-		result = tcp_mtu_probe(sk);
++		result = tcp_mtu_probe(sk, tp);
+ 		if (!result) {
+ 			return false;
+ 		} else if (result > 0) {
+@@ -2320,8 +2336,8 @@
+ 	while ((skb = tcp_send_head(sk))) {
+ 		unsigned int limit;
+ 
+-		if (tcp_pacing_check(sk))
+-			break;
++        	// Not needed for NAS on LAN
++        	//if (unlikely(tcp_pacing_check(sk))) b
+ 
+ 		tso_segs = tcp_init_tso_segs(skb, mss_now);
+ 		BUG_ON(!tso_segs);
+@@ -2333,7 +2349,7 @@
+ 		}
+ 
+ 		cwnd_quota = tcp_cwnd_test(tp, skb);
+-		if (!cwnd_quota) {
++		if (unlikely(!cwnd_quota)) {
+ 			if (push_one == 2)
+ 				/* Force out a loss probe pkt. */
+ 				cwnd_quota = 1;
+@@ -2346,32 +2362,27 @@
+ 			break;
+ 		}
+ 
+-		if (tso_segs == 1) {
++        	limit = mss_now;
++		if (tso_segs == 1) { // likely 1 on receive, never 1 on transmit
+ 			if (unlikely(!tcp_nagle_test(tp, skb, mss_now,
+-						     (tcp_skb_is_last(sk, skb) ?
+-						      nonagle : TCP_NAGLE_PUSH))))
++				 (tcp_skb_is_last(sk, skb) ? nonagle : TCP_NAGLE_PUSH))))
+ 				break;
+ 		} else {
+ 			if (!push_one &&
+ 			    tcp_tso_should_defer(sk, skb, &is_cwnd_limited,
+ 						 &is_rwnd_limited, max_segs))
+ 				break;
++           		if (likely(!tcp_urg_mode(tp)))
++                		limit = tcp_mss_split_point(sk, skb, mss_now, 
++					min_t(unsigned int, cwnd_quota, max_segs), nonagle, tp);
+ 		}
+ 
+-		limit = mss_now;
+-		if (tso_segs > 1 && !tcp_urg_mode(tp))
+-			limit = tcp_mss_split_point(sk, skb, mss_now,
+-						    min_t(unsigned int,
+-							  cwnd_quota,
+-							  max_segs),
+-						    nonagle);
+-
+ 		if (skb->len > limit &&
+ 		    unlikely(tso_fragment(sk, TCP_FRAG_IN_WRITE_QUEUE,
+ 					  skb, limit, mss_now, gfp)))
+ 			break;
+ 
+-		if (tcp_small_queue_check(sk, skb, 0))
++		if (tcp_small_queue_check(sk, skb, 0))  //ECO likely
+ 			break;
+ 
+ 		if (unlikely(tcp_transmit_skb(sk, skb, 1, gfp)))
+@@ -2390,13 +2401,13 @@
+ 			break;
+ 	}
+ 
+-	if (is_rwnd_limited)
++	if (unlikely(is_rwnd_limited))
+ 		tcp_chrono_start(sk, TCP_CHRONO_RWND_LIMITED);
+ 	else
+ 		tcp_chrono_stop(sk, TCP_CHRONO_RWND_LIMITED);
+ 
+ 	if (likely(sent_pkts)) {
+-		if (tcp_in_cwnd_reduction(sk))
++		if (tcp_in_cwnd_reduction(sk))	//ECO unlikely
+ 			tp->prr_out += sent_pkts;
+ 
+ 		/* Send one loss probe per tail loss episode. */

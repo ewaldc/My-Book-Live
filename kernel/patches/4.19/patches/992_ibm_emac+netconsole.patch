@@ -1,31 +1,36 @@
---- a/drivers/net/ethernet/ibm/emac/core.c	2019-02-20 10:25:50.000000000 +0100
-+++ b/drivers/net/ethernet/ibm/emac/core.c	2019-03-11 18:01:30.085250678 +0100
-@@ -33,6 +33,7 @@
+--- a/drivers/net/ethernet/ibm/emac/core.c	2019-04-03 06:26:31.000000000 +0200
++++ b/drivers/net/ethernet/ibm/emac/core.c	2019-04-07 12:54:37.696842409 +0200
+@@ -24,27 +24,19 @@
+  *
+  */
+ 
+-#include <linux/module.h>
+ #include <linux/sched.h>
+ #include <linux/string.h>
+ #include <linux/errno.h>
+-#include <linux/delay.h>
+ #include <linux/types.h>
  #include <linux/pci.h>
- #include <linux/etherdevice.h>
- #include <linux/skbuff.h>
-+#include <linux/tcp.h>
+-#include <linux/etherdevice.h>
+-#include <linux/skbuff.h>
  #include <linux/crc32.h>
  #include <linux/ethtool.h>
  #include <linux/mii.h>
-@@ -45,6 +46,7 @@
- #include <linux/of_mdio.h>
- #include <linux/slab.h>
+ #include <linux/bitops.h>
+ #include <linux/workqueue.h>
+-#include <linux/of.h>
+-#include <linux/of_address.h>
+-#include <linux/of_irq.h>
+-#include <linux/of_net.h>
+-#include <linux/of_mdio.h>
+-#include <linux/slab.h>
  
 +#include <net/tcp.h>
++#include <net/pkt_sched.h>
  #include <asm/processor.h>
  #include <asm/io.h>
  #include <asm/dma.h>
-@@ -52,6 +54,8 @@
- #include <asm/dcr.h>
- #include <asm/dcr-regs.h>
- 
-+#include <net/pkt_sched.h>
-+
- #include "core.h"
- 
- /*
-@@ -76,8 +80,7 @@
+@@ -76,18 +68,9 @@
  #define DRV_DESC        "PPC 4xx OCP EMAC driver"
  
  MODULE_DESCRIPTION(DRV_DESC);
@@ -34,8 +39,26 @@
 +MODULE_AUTHOR("Eugene Surovegin <eugene.surovegin@zultys.com> or <ebs@ebshome.net>");
  MODULE_LICENSE("GPL");
  
- /* minimum number of free TX descriptors required to wake up TX process */
-@@ -123,15 +126,13 @@
+-/* minimum number of free TX descriptors required to wake up TX process */
+-#define EMAC_TX_WAKEUP_THRESH		(NUM_TX_BUFF / 4)
+-
+-/* If packet size is less than this number, we allocate small skb and copy packet
+- * contents into it instead of just sending original big skb up
+- */
+-#define EMAC_RX_COPY_THRESH		CONFIG_IBM_EMAC_RX_COPY_THRESHOLD
+-
+ /* Since multiple EMACs share MDIO lines in various ways, we need
+  * to avoid re-using the same PHY ID in cases where the arch didn't
+  * setup precise phy_map entries
+@@ -96,6 +79,7 @@
+  * EMAC "sets" (multiple ASICs containing several EMACs) though we can
+  * probably require in that case to have explicit PHY IDs in the device-tree
+  */
++//static int cnt1=0, cnt2=0, cnt3=0;
+ static u32 busy_phy_map;
+ static DEFINE_MUTEX(emac_phy_map_lock);
+ 
+@@ -123,15 +107,13 @@
  #define EMAC_PROBE_DEP_TIMEOUT	(HZ * 5)
  
  /* I don't want to litter system log with timeout errors
@@ -55,7 +78,7 @@
  	else if (net_ratelimit())
  		printk(KERN_ERR "%pOF: %s\n", dev->ofdev->dev.of_node, error);
  }
-@@ -140,21 +141,17 @@
+@@ -140,39 +122,33 @@
   * 440EP/440GR has more sane SDR0_MFR register implementation than 440GX,
   * which allows controlling each EMAC clock
   */
@@ -81,9 +104,12 @@
  #endif
  }
  
-@@ -163,16 +160,13 @@
+ /* PHY polling intervals */
+ #define PHY_POLL_LINK_ON	HZ
  #define PHY_POLL_LINK_OFF	(HZ / 5)
- 
+-
++//#define PHY_POLL_LINK_ON	HZ / 10
++//#define PHY_POLL_LINK_OFF	(HZ / 50)
  /* Graceful stop timeouts in us.
 - * We should allow up to 1 frame time (full-duplex, ignoring collisions)
 - */
@@ -100,7 +126,7 @@
  
  /* Please, keep in sync with struct ibm_emac_stats/ibm_emac_error_stats */
  static const char emac_stats_keys[EMAC_ETHTOOL_STATS_COUNT][ETH_GSTRING_LEN] = {
-@@ -194,39 +188,29 @@
+@@ -194,44 +170,34 @@
  };
  
  static irqreturn_t emac_irq(int irq, void *dev_instance);
@@ -150,7 +176,13 @@
  	struct emac_regs __iomem *p = dev->emacp;
  	u32 r;
  
-@@ -245,57 +229,67 @@
+ 	DBG(dev, "tx_disable" NL);
+-
++ 
+ 	r = in_be32(&p->mr0);
+ 	if (r & EMAC_MR0_TXE) {
+ 		int n = dev->stop_timeout;
+@@ -245,57 +211,68 @@
  	}
  }
  
@@ -186,7 +218,7 @@
 +}
 +#endif
 +
-+static __always_inline void emac_rx_enable(struct emac_instance *dev) {
++inline void emac_rx_enable(struct emac_instance *dev) {
  	struct emac_regs __iomem *p = dev->emacp;
 -	u32 r;
 +	u32 r = in_be32(&p->mr0);
@@ -218,6 +250,7 @@
 - out:
 -	;
  }
++EXPORT_SYMBOL_GPL(emac_rx_enable);
  
 -static void emac_rx_disable(struct emac_instance *dev)
 -{
@@ -249,7 +282,7 @@
  	netif_tx_lock_bh(dev->ndev);
  	netif_addr_lock(dev->ndev);
  	dev->no_mcast = 1;
-@@ -306,8 +300,7 @@
+@@ -306,8 +283,7 @@
  	netif_tx_disable(dev->ndev);
  }
  
@@ -259,7 +292,7 @@
  	netif_tx_lock_bh(dev->ndev);
  	netif_addr_lock(dev->ndev);
  	dev->no_mcast = 0;
-@@ -326,20 +319,15 @@
+@@ -326,20 +302,15 @@
  	mal_poll_enable(dev->mal, &dev->commac);
  }
  
@@ -284,7 +317,7 @@
  	struct emac_regs __iomem *p = dev->emacp;
  	int n = 20;
  	bool __maybe_unused try_internal_clock = false;
-@@ -347,9 +335,14 @@
+@@ -347,9 +318,14 @@
  	DBG(dev, "reset" NL);
  
  	if (!dev->reset_failed) {
@@ -302,7 +335,7 @@
  		emac_rx_disable(dev);
  		emac_tx_disable(dev);
  	}
-@@ -374,22 +367,18 @@
+@@ -374,22 +350,18 @@
  	 * the first reset fails.
  	 */
  	if (emac_has_feature(dev, EMAC_FTR_460EX_PHY_CLK_FIX)) {
@@ -331,7 +364,7 @@
  
  #ifdef CONFIG_PPC_DCR_NATIVE
  	if (emac_has_feature(dev, EMAC_FTR_460EX_PHY_CLK_FIX)) {
-@@ -400,11 +389,9 @@
+@@ -400,11 +372,9 @@
  			goto do_retry;
  		}
  
@@ -345,7 +378,7 @@
  		}
  	}
  #endif
-@@ -419,164 +406,107 @@
+@@ -419,164 +389,106 @@
  	}
  }
  
@@ -463,9 +496,9 @@
 -static u32 __emac4_calc_base_mr1(struct emac_instance *dev, int tx_size, int rx_size)
 -{
 -	u32 ret = EMAC_MR1_VLE | EMAC_MR1_IST | EMAC4_MR1_TR |
+-		EMAC4_MR1_OBCI(dev->opb_bus_freq / 1000000);
 +static u32 __emac4_calc_base_mr1(struct emac_instance *dev, int tx_size, int rx_size) {
-+	u32 ret = EMAC_MR1_VLE| EMAC_MR1_IST| EMAC4_MR1_TR| 	// EMAC_MR1_APP |  (ECO)
- 		EMAC4_MR1_OBCI(dev->opb_bus_freq / 1000000);
++	u32 ret = EMAC_MR1_VLE| EMAC_MR1_IST| EMAC4_MR1_TR| EMAC4_MR1_OBCI(dev->opb_bus_freq / 1000000);
  
  	DBG2(dev, "__emac4_calc_base_mr1" NL);
 -
@@ -557,7 +590,7 @@
  	struct emac_regs __iomem *p = dev->emacp;
  	struct net_device *ndev = dev->ndev;
  	int tx_size, rx_size, link = netif_carrier_ok(dev->ndev);
-@@ -585,14 +515,11 @@
+@@ -585,14 +497,11 @@
  	DBG(dev, "configure" NL);
  
  	if (!link) {
@@ -575,7 +608,7 @@
  
  	DBG(dev, " link = %d duplex = %d, pause = %d, asym_pause = %d\n",
  	    link, dev->phy.duplex, dev->phy.pause, dev->phy.asym_pause);
-@@ -602,12 +529,16 @@
+@@ -602,12 +511,16 @@
  	rx_size = dev->rx_fifo_size;
  
  	/* No link, force loopback */
@@ -595,7 +628,7 @@
  
  	/* Adjust fifo sizes, mr1 and timeouts based on link speed */
  	dev->stop_timeout = STOP_TIMEOUT_10;
-@@ -630,37 +561,29 @@
+@@ -630,37 +543,29 @@
  		rx_size = dev->rx_fifo_size_gige;
  
  		if (dev->ndev->mtu > ETH_DATA_LEN) {
@@ -636,12 +669,12 @@
 -			mr1 |= EMAC_MR1_EIFC | EMAC_MR1_APP;
 -		else if (dev->phy.asym_pause)
 -			mr1 |= EMAC_MR1_APP;
-+		if (dev->phy.pause)	mr1 |= EMAC_MR1_EIFC | EMAC_MR1_APP;
++ 		if (dev->phy.pause)	mr1 |= EMAC_MR1_EIFC | EMAC_MR1_APP;
 +		else if (dev->phy.asym_pause) mr1 |= EMAC_MR1_APP;
  	}
  
  	/* Add base settings & fifo sizes & program MR1 */
-@@ -669,25 +592,22 @@
+@@ -669,25 +574,23 @@
  
  	/* Set individual MAC address */
  	out_be32(&p->iahr, (ndev->dev_addr[0] << 8) | ndev->dev_addr[1]);
@@ -661,33 +694,45 @@
 +	if (r & EMAC_RMR_MAE) emac_hash_mc(dev);
  	out_be32(&p->rmr, r);
  
- 	/* FIFOs thresholds */
+-	/* FIFOs thresholds */
++	/* FIFOs thresholds, 2K TX FIFO, 16K RX FIFO */
  	if (emac_has_feature(dev, EMAC_FTR_EMAC4))
  		r = EMAC4_TMR1((dev->mal_burst_size / dev->fifo_entry_size) + 1,
- 			       tx_size / 2 / dev->fifo_entry_size);
+-			       tx_size / 2 / dev->fifo_entry_size);
 -	else
 -		r = EMAC_TMR1((dev->mal_burst_size / dev->fifo_entry_size) + 1,
++					tx_size / 4 * 3 / dev->fifo_entry_size);
++			       //tx_size / 2 / dev->fifo_entry_size);
 +	else r = EMAC_TMR1((dev->mal_burst_size / dev->fifo_entry_size) + 1,
  			      tx_size / 2 / dev->fifo_entry_size);
  	out_be32(&p->tmr1, r);
  	out_be32(&p->trtr, emac_calc_trtr(dev, tx_size / 2));
-@@ -709,8 +629,7 @@
+@@ -708,11 +611,13 @@
+ 	   ----------
  	   3187 bytes
  
- 	   I chose to set high-water mark to RX_FIFO_SIZE / 4 (1024 bytes)
--	   low-water mark  to RX_FIFO_SIZE / 8 (512 bytes)
+-	   I chose to set high-water mark to RX_FIFO_SIZE / 4 (1024 bytes)
++	   The original choice to set high-water mark to RX_FIFO_SIZE / 4 (1024 bytes)
+ 	   low-water mark  to RX_FIFO_SIZE / 8 (512 bytes)
 -	 */
-+	   low-water mark  to RX_FIFO_SIZE / 8 (512 bytes) */
- 	r = emac_calc_rwmr(dev, rx_size / 8 / dev->fifo_entry_size,
- 			   rx_size / 4 / dev->fifo_entry_size);
+-	r = emac_calc_rwmr(dev, rx_size / 8 / dev->fifo_entry_size,
+-			   rx_size / 4 / dev->fifo_entry_size);
++	   I believe a larger size is beneficial e.g. 3/4th given amount of overruns  */
++	//r = emac_calc_rwmr(dev, rx_size / 8 / dev->fifo_entry_size,
++	//		   rx_size / 4 / dev->fifo_entry_size);
++	r = emac_calc_rwmr(dev, rx_size / 8 / dev->fifo_entry_size, 
++			   rx_size / 4 / dev->fifo_entry_size * 3);
  	out_be32(&p->rwmr, r);
-@@ -723,23 +642,18 @@
+ 
+ 	/* Set PAUSE timer to the maximum */
+@@ -723,23 +628,19 @@
  		EMAC_ISR_ALE | EMAC_ISR_BFCS | EMAC_ISR_PTLE | EMAC_ISR_ORE |
  		EMAC_ISR_IRE | EMAC_ISR_TE;
  	if (emac_has_feature(dev, EMAC_FTR_EMAC4))
 -	    r |= EMAC4_ISR_TXPE | EMAC4_ISR_RXPE /* | EMAC4_ISR_TXUE |
 -						  EMAC4_ISR_RXOE | */;
-+	    r |= EMAC4_ISR_TXPE | EMAC4_ISR_RXPE /* | EMAC4_ISR_TXUE | EMAC4_ISR_RXOE | */;
++	    // Enable tx underrun interrupts but disable rx overruns given the massive amount of overruns
++	    r |= EMAC4_ISR_TXPE | EMAC4_ISR_RXPE | EMAC4_ISR_TXUE; // | EMAC4_ISR_RXOE;
  	out_be32(&p->iser,  r);
  
  	/* We need to take GPCS PHY out of isolate mode after EMAC reset */
@@ -709,7 +754,7 @@
  	DBG(dev, "reinitialize" NL);
  
  	emac_netif_stop(dev);
-@@ -750,8 +664,7 @@
+@@ -750,8 +651,7 @@
  	emac_netif_start(dev);
  }
  
@@ -719,7 +764,7 @@
  	DBG(dev, "full_tx_reset" NL);
  
  	emac_tx_disable(dev);
-@@ -766,12 +679,10 @@
+@@ -766,12 +666,10 @@
  	emac_rx_enable(dev);
  }
  
@@ -733,7 +778,7 @@
  	mutex_lock(&dev->link_lock);
  	if (dev->opened) {
  		emac_netif_stop(dev);
-@@ -781,41 +692,30 @@
+@@ -781,41 +679,30 @@
  	mutex_unlock(&dev->link_lock);
  }
  
@@ -782,7 +827,7 @@
  
  	/* Wait for management interface to become idle */
  	n = 20;
-@@ -828,18 +728,13 @@
+@@ -828,18 +715,13 @@
  	}
  
  	/* Issue read command */
@@ -808,7 +853,7 @@
  	out_be32(&p->stacr, r);
  
  	/* Wait for read to complete */
-@@ -863,31 +758,19 @@
+@@ -863,31 +745,19 @@
  	DBG2(dev, "mdio_read -> %04x" NL, r);
  	err = 0;
   bail:
@@ -844,7 +889,7 @@
  
  	/* Wait for management interface to be idle */
  	n = 20;
-@@ -900,19 +783,13 @@
+@@ -900,19 +770,13 @@
  	}
  
  	/* Issue write command */
@@ -871,7 +916,7 @@
  	out_be32(&p->stacr, r);
  
  	/* Wait for write to complete */
-@@ -926,38 +803,24 @@
+@@ -926,38 +790,24 @@
  	}
  	err = 0;
   bail:
@@ -918,7 +963,7 @@
  	struct emac_regs __iomem *p = dev->emacp;
  	u32 rmr = emac_iff2rmr(dev->ndev);
  
-@@ -982,64 +845,50 @@
+@@ -982,64 +832,50 @@
  	 */
  	dev->mcast_pending = 0;
  	emac_rx_disable(dev);
@@ -990,7 +1035,7 @@
  
  	mutex_lock(&dev->link_lock);
  	emac_netif_stop(dev);
-@@ -1054,20 +903,18 @@
+@@ -1054,24 +890,23 @@
  
  	/* Make a first pass over RX ring and mark BDs ready, dropping
  	 * non-processed packets on the way. We need this as a separate pass
@@ -1018,13 +1063,21 @@
  
  	/* Second pass, allocate new skbs */
  	for (i = 0; i < NUM_RX_BUFF; ++i) {
-@@ -1082,18 +929,15 @@
+-		struct sk_buff *skb = alloc_skb(rx_skb_size, GFP_ATOMIC);
++		//struct sk_buff *skb = alloc_skb(rx_skb_size, GFP_ATOMIC);
++		struct sk_buff *skb = netdev_alloc_skb_ip_align(dev->ndev, rx_skb_size);
+ 		if (!skb) {
+ 			ret = -ENOMEM;
+ 			goto oom;
+@@ -1080,20 +915,16 @@
+ 		BUG_ON(!dev->rx_skb[i]);
+ 		dev_kfree_skb(dev->rx_skb[i]);
  
- 		skb_reserve(skb, EMAC_RX_SKB_HEADROOM + 2);
+-		skb_reserve(skb, EMAC_RX_SKB_HEADROOM + 2);
  		dev->rx_desc[i].data_ptr =
 -		    dma_map_single(&dev->ofdev->dev, skb->data - 2, rx_sync_size,
 -				   DMA_FROM_DEVICE) + 2;
-+		    dma_map_single(&dev->ofdev->dev, skb->data - 2, rx_sync_size, DMA_FROM_DEVICE) + 2;
++		    dma_map_single(dev->ofdev_dev, skb->data - NET_IP_ALIGN, rx_sync_size, DMA_FROM_DEVICE) + NET_IP_ALIGN;
  		dev->rx_skb[i] = skb;
  	}
   skip:
@@ -1040,7 +1093,7 @@
  	}
  
  	if (mr1_jumbo_bit_change) {
-@@ -1118,8 +962,7 @@
+@@ -1118,8 +949,7 @@
  }
  
  /* Process ctx, rtnl_lock semaphore */
@@ -1050,18 +1103,18 @@
  	struct emac_instance *dev = netdev_priv(ndev);
  	int ret = 0;
  
-@@ -1132,6 +975,28 @@
+@@ -1132,6 +962,27 @@
  	}
  
  	if (!ret) {
 +#if defined(CONFIG_IBM_EMAC_TAH) && defined(EMAC_HW_TSO)  //ECO
-+		//if (emac_has_feature(dev, EMAC_FTR_HAS_TAH)) {
 +		struct tah_instance *tdev;
 +		int i, adj_val = 0;
 +		u32 ssr_def[TAH_NO_SSR];
 +		switch (new_mtu) {
 +			case 9000:	memcpy(ssr_def, (u32[])TAH_SS_DEFAULT_9K, sizeof ssr_def); break;
-+			case 4080:	memcpy(ssr_def, (u32[])TAH_SS_DEFAULT_4K, sizeof ssr_def); break;
++			case 4080:  
++            case 4000:  memcpy(ssr_def, (u32[])TAH_SS_DEFAULT_4K, sizeof ssr_def); break;
 +			default:	memcpy(ssr_def, (u32[])TAH_SS_DEFAULT, sizeof ssr_def); break;
 +		}
 +		tdev = dev_get_drvdata(&dev->tah_dev->dev);
@@ -1074,18 +1127,17 @@
 +			  else tah_set_ssr(dev->tah_dev, i,	ssr_def[i-adj_val]);
 +
 +		}
-+		//}
 +#endif
  		ndev->mtu = new_mtu;
  		dev->rx_skb_size = emac_rx_skb_size(new_mtu);
  		dev->rx_sync_size = emac_rx_sync_size(new_mtu);
-@@ -1140,28 +1005,25 @@
+@@ -1140,28 +991,25 @@
  	return ret;
  }
  
 -static void emac_clean_tx_ring(struct emac_instance *dev)
 -{
-+static __always_inline void emac_clean_tx_ring(struct emac_instance *dev) {
++static void emac_clean_tx_ring(struct emac_instance *dev) {
  	int i;
  
  	for (i = 0; i < NUM_TX_BUFF; ++i) {
@@ -1104,9 +1156,8 @@
  
 -static void emac_clean_rx_ring(struct emac_instance *dev)
 -{
--	int i;
-+static __always_inline void emac_clean_rx_ring(struct emac_instance *dev) {
-+	register int i;
++static void emac_clean_rx_ring(struct emac_instance *dev) {
+ 	int i;
  
  	for (i = 0; i < NUM_RX_BUFF; ++i)
 -		if (dev->rx_skb[i]) {
@@ -1114,38 +1165,57 @@
  			dev->rx_desc[i].ctrl = 0;
  			dev_kfree_skb(dev->rx_skb[i]);
  			dev->rx_skb[i] = NULL;
-@@ -1174,60 +1036,56 @@
+@@ -1174,60 +1022,69 @@
  	}
  }
  
 -static inline int emac_alloc_rx_skb(struct emac_instance *dev, int slot,
 -				    gfp_t flags)
 -{
-+static inline int emac_alloc_rx_skb(struct emac_instance *dev, int slot, gfp_t flags) {
- 	struct sk_buff *skb = alloc_skb(dev->rx_skb_size, flags);
+-	struct sk_buff *skb = alloc_skb(dev->rx_skb_size, flags);
 -	if (unlikely(!skb))
 -		return -ENOMEM;
-+	if (unlikely(!skb))	return -ENOMEM;
++#if !defined (CONFIG_APM821xx) // Moved to core.c for CONFIG_APM821xx
++static __always_inline int __prepare_rx_skb(struct sk_buff *skb, struct emac_instance *dev, int slot,
++        struct mal_descriptor *rx_desc) {
  
  	dev->rx_skb[slot] = skb;
- 	dev->rx_desc[slot].data_len = 0;
- 
- 	skb_reserve(skb, EMAC_RX_SKB_HEADROOM + 2);
- 	dev->rx_desc[slot].data_ptr =
+-	dev->rx_desc[slot].data_len = 0;
+-
+-	skb_reserve(skb, EMAC_RX_SKB_HEADROOM + 2);
+-	dev->rx_desc[slot].data_ptr =
 -	    dma_map_single(&dev->ofdev->dev, skb->data - 2, dev->rx_sync_size,
 -			   DMA_FROM_DEVICE) + 2;
-+	    dma_map_single(&dev->ofdev->dev, skb->data - 2, dev->rx_sync_size, DMA_FROM_DEVICE) + 2;
++    rx_desc->data_len = 0;
++    rx_desc->data_ptr =
++	    dma_map_single(dev->ofdev_dev, skb->data - NET_IP_ALIGN, dev->rx_sync_size, DMA_FROM_DEVICE) + NET_IP_ALIGN;
  	wmb();
 -	dev->rx_desc[slot].ctrl = MAL_RX_CTRL_EMPTY |
 -	    (slot == (NUM_RX_BUFF - 1) ? MAL_RX_CTRL_WRAP : 0);
-+	dev->rx_desc[slot].ctrl = MAL_RX_CTRL_EMPTY | MAL_RX_CTRL_INTR |
-+	    (slot == (NUM_RX_BUFF - 1) ? MAL_RX_CTRL_WRAP : 0);  //ECO
- 
+-
++	rx_desc->ctrl = MAL_RX_CTRL_EMPTY | MAL_RX_CTRL_INTR | (slot == (NUM_RX_BUFF - 1) ? MAL_RX_CTRL_WRAP : 0);
  	return 0;
  }
  
 -static void emac_print_link_status(struct emac_instance *dev)
 -{
++static inline int alloc_rx_skb(struct emac_instance *dev, int slot) {
++	struct sk_buff *skb;
++	skb = __netdev_alloc_skb_ip_align(dev->ndev, dev->rx_skb_size, GFP_KERNEL);
++    if (unlikely(!skb))	return -ENOMEM;
++	return __prepare_rx_skb(skb, dev, slot, &dev->rx_desc[slot]);
++}
++
++static inline int alloc_rx_skb_napi(struct emac_instance *dev, int slot) {
++	struct sk_buff *skb;
++	skb = napi_alloc_skb(&dev->mal->napi, dev->rx_skb_size);
++    if (unlikely(!skb))	return -ENOMEM;
++	return __prepare_rx_skb(skb, dev, slot, &dev->rx_desc[slot]);
++}
++#else
++extern int alloc_rx_skb(struct emac_instance *dev, int slot);
++#endif
++
 +static void emac_print_link_status(struct emac_instance *dev) {
  	if (netif_carrier_ok(dev->ndev))
 -		printk(KERN_INFO "%s: link is up, %d %s%s\n",
@@ -1194,12 +1264,12 @@
 -		if (emac_alloc_rx_skb(dev, i, GFP_KERNEL)) {
 -			printk(KERN_ERR "%s: failed to allocate RX ring\n",
 -			       ndev->name);
-+		if (unlikely(emac_alloc_rx_skb(dev, i, GFP_KERNEL))) {
++		if (unlikely(alloc_rx_skb(dev, i))) {
 +			printk(KERN_ERR "%s: failed to allocate RX ring\n", ndev->name);
  			goto oom;
  		}
  
-@@ -1238,8 +1096,7 @@
+@@ -1238,8 +1095,7 @@
  	mutex_lock(&dev->link_lock);
  	dev->opened = 1;
  
@@ -1209,7 +1279,7 @@
  	if (dev->phy.address >= 0) {
  		int link_poll_interval;
  		if (dev->phy.def->ops->poll_link(&dev->phy)) {
-@@ -1262,6 +1119,7 @@
+@@ -1262,6 +1118,7 @@
  	/* Required for Pause packet support in EMAC */
  	dev_mc_add_global(ndev, default_mcast_addr);
  
@@ -1217,7 +1287,7 @@
  	emac_configure(dev);
  	mal_poll_add(dev->mal, &dev->commac);
  	mal_enable_tx_channel(dev->mal, dev->mal_tx_chan);
-@@ -1269,6 +1127,8 @@
+@@ -1269,6 +1126,8 @@
  	mal_enable_rx_channel(dev->mal, dev->mal_rx_chan);
  	emac_tx_enable(dev);
  	emac_rx_enable(dev);
@@ -1226,7 +1296,7 @@
  	emac_netif_start(dev);
  
  	mutex_unlock(&dev->link_lock);
-@@ -1277,55 +1137,42 @@
+@@ -1277,61 +1136,49 @@
   oom:
  	emac_clean_rx_ring(dev);
  	free_irq(dev->emac_irq, dev);
@@ -1283,16 +1353,25 @@
 -			     struct emac_instance, link_work);
 +		container_of(to_delayed_work(work), struct emac_instance, link_work);
  	int link_poll_interval;
++    struct mii_phy *phy = &dev->phy;
  
  	mutex_lock(&dev->link_lock);
  	DBG2(dev, "link timer" NL);
  
 -	if (!dev->opened)
 -		goto bail;
-+	if (!dev->opened) goto bail;
++	if (unlikely(!dev->opened)) goto bail;
  
- 	if (dev->phy.def->ops->poll_link(&dev->phy)) {
+-	if (dev->phy.def->ops->poll_link(&dev->phy)) {
++	if (phy->def->ops->poll_link(phy)) {
  		if (!netif_carrier_ok(dev->ndev)) {
+ 			emac_rx_clk_default(dev);
+ 			/* Get new link parameters */
+-			dev->phy.def->ops->read_link(&dev->phy);
++			phy->def->ops->read_link(phy);
+ 
+ 			netif_carrier_on(dev->ndev);
+ 			emac_netif_stop(dev);
 @@ -1355,8 +1202,7 @@
  	mutex_unlock(&dev->link_lock);
  }
@@ -1315,7 +1394,7 @@
  	struct emac_instance *dev = netdev_priv(ndev);
  
  	DBG(dev, "close" NL);
-@@ -1394,35 +1239,55 @@
+@@ -1394,35 +1239,43 @@
  	free_irq(dev->emac_irq, dev);
  
  	netif_carrier_off(ndev);
@@ -1329,32 +1408,22 @@
 -{
 -	if (emac_has_feature(dev, EMAC_FTR_HAS_TAH) &&
 -		(skb->ip_summed == CHECKSUM_PARTIAL)) {
-+static inline u16 emac_tx_csum(struct emac_instance *dev, struct sk_buff *skb) {
-+	if (skb->ip_summed == CHECKSUM_PARTIAL) {
++static __always_inline u16 emac_tx_csum(struct emac_instance *dev, struct sk_buff *skb) {
++	if (likely(skb->ip_summed == CHECKSUM_PARTIAL)) {
  		++dev->stats.tx_packets_csum;
 +
 +#if defined(CONFIG_IBM_EMAC_TAH) && defined(EMAC_HW_TSO)  //ECO
 +#define SKB_GSO_TYPE(skb)	(skb_shinfo(skb)->gso_type)
 +		// Only support TSO (TCP segmentation offload) for TCP
-+		if (likely(skb_is_gso(skb)) && likely(SKB_GSO_TYPE(skb) & SKB_GSO_TCPV4)) {
-+			//|| (SKB_GSO_TYPE(skb) & SKB_GSO_TCPV6)) 
-+			//return EMAC_TX_CTRL_TAH_SSR(0);
-+			register u32 seg_size, i;
-+			//struct tah_instance *tah_dev;
-+			//static int first = 0;
-+
-+			//if (likely(skb->protocol == cpu_to_be16(ETH_P_IP)))	is_tcp = (ip_hdr(skb)->protocol == IPPROTO_TCP);
-+			//else if (skb->protocol == cpu_to_be16(ETH_P_IPV6))	is_tcp = (ipv6_hdr(skb)->nexthdr == IPPROTO_TCP);
-+			seg_size = skb->len + tcp_hdrlen(skb) + skb_network_header_len(skb);  
-+			//tah_dev = dev_get_drvdata(&dev->tah_dev->dev);	// Get the best suitable MTU
-+			for (i = 0; i < TAH_NO_SSR; i++) if (dev->ssr[i] <= seg_size) break;
-+			//if (first++ & 0x40) printk(KERN_INFO "SSR: index %d, value:%d, segment size:%d, TCP_HDR:%d, NW_HDR:%d\n", 
-+			//	i, dev->ssr[i], seg_size, tcp_hdrlen(skb), skb_network_header_len(skb));		
-+			/*if (i == TAH_NO_SSR) {
-+				printk(KERN_WARNING "No suitable TAH_SSRx for segmentation size %d\n", seg_size);
-+				return EMAC_TX_CTRL_TAH_CSUM;  // Avoid using TSO feature in this case
-+			}*/
-+			return EMAC_TX_CTRL_TAH_SSR(i);
++		if (likely(skb_is_gso(skb) && likely(SKB_GSO_TYPE(skb) & (SKB_GSO_TCPV4 | SKB_GSO_TCPV6)))) {
++            return EMAC_TX_CTRL_TAH_SSR0;
++            /* Technically this is the correct code. However when skb_is_gso(skb) is true, 
++             * the packet is larger than MTU, hence returning ssr0 is OK */
++            /*
++ 			u32 i = 0, seg_size = skb->len + tcp_hdrlen(skb) + skb_network_header_len(skb);
++            do if (likely(dev->ssr[i] <= seg_size)) return EMAC_TX_CTRL_TAH_SSR(i);
++            while (++i < TAH_NO_SSR);
++            */
 +		}
 +#endif
  		return EMAC_TX_CTRL_TAH_CSUM;
@@ -1364,9 +1433,9 @@
  
 -static inline int emac_xmit_finish(struct emac_instance *dev, int len)
 -{
-+static __always_inline int emac_xmit_finish(struct emac_instance *dev, int len) {
- 	struct emac_regs __iomem *p = dev->emacp;
- 	struct net_device *ndev = dev->ndev;
+-	struct emac_regs __iomem *p = dev->emacp;
+-	struct net_device *ndev = dev->ndev;
++static __always_inline int emac_xmit_finish(struct emac_instance *dev, struct net_device *ndev, int len) {
  
  	/* Send the packet out. If the if makes a significant perf
 -	 * difference, then we can store the TMR0 value in "dev"
@@ -1379,28 +1448,39 @@
 -
 +	 * difference, then we can store the TMR0 value in "dev" instead */
 +#ifdef CONFIG_IBM_EMAC_EMAC4	
-+	out_be32(&p->tmr0, EMAC4_TMR0_XMIT);
++    out_be32(dev->tmr0, EMAC4_TMR0_XMIT);
 +#else
-+	out_be32(&p->tmr0, EMAC_TMR0_XMIT);
++    out_be32(dev->tmr0, EMAC_TMR0_XMIT);
 +#endif
  	if (unlikely(++dev->tx_cnt == NUM_TX_BUFF)) {
  		netif_stop_queue(ndev);
  		DBG2(dev, "stopped TX queue" NL);
-@@ -1436,27 +1301,29 @@
+@@ -1436,113 +1289,106 @@
  }
  
  /* Tx lock BH */
 -static int emac_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 -{
-+static int emac_start_xmit(struct sk_buff *skb, struct net_device *ndev) {
- 	struct emac_instance *dev = netdev_priv(ndev);
- 	unsigned int len = skb->len;
+-	struct emac_instance *dev = netdev_priv(ndev);
+-	unsigned int len = skb->len;
 -	int slot;
-+	register int slot = dev->tx_slot++;
- 
- 	u16 ctrl = EMAC_TX_CTRL_GFCS | EMAC_TX_CTRL_GP | MAL_TX_CTRL_READY |
+-
+-	u16 ctrl = EMAC_TX_CTRL_GFCS | EMAC_TX_CTRL_GP | MAL_TX_CTRL_READY |
 -	    MAL_TX_CTRL_LAST | emac_tx_csum(dev, skb);
-+	    MAL_TX_CTRL_LAST | MAL_TX_CTRL_INTR | emac_tx_csum(dev, skb) ;
+-
+-	slot = dev->tx_slot++;
+-	if (dev->tx_slot == NUM_TX_BUFF) {
+-		dev->tx_slot = 0;
+-		ctrl |= MAL_TX_CTRL_WRAP;
+-	}
+-
+-	DBG2(dev, "xmit(%u) %d" NL, len, slot);
+-
++static __always_inline int _emac_start_xmit(struct sk_buff *skb, register struct emac_instance *dev, unsigned int len) {
++	register int slot = dev->tx_slot;
++    register struct mal_descriptor *desc = &dev->tx_desc[slot];
++	register u16 ctrl = EMAC_TX_CTRL_GFCS | EMAC_TX_CTRL_GP | MAL_TX_CTRL_READY |
++	    MAL_TX_CTRL_LAST | MAL_TX_CTRL_INTR | emac_tx_csum(dev, skb);
 +#ifdef CONFIG_IBM_EMAC_MASK_CEXT
 +	if (atomic_read(&dev->mask_cext_enable))
 +		if (atomic_read(&dev->idle_mode)) {
@@ -1408,82 +1488,94 @@
 +		    atomic_set(&dev->idle_mode, 0);
 +		}
 +#endif
- 
--	slot = dev->tx_slot++;
--	if (dev->tx_slot == NUM_TX_BUFF) {
-+	if (unlikely(dev->tx_slot == NUM_TX_BUFF)) {
- 		dev->tx_slot = 0;
- 		ctrl |= MAL_TX_CTRL_WRAP;
- 	}
- 
--	DBG2(dev, "xmit(%u) %d" NL, len, slot);
--
++    dev->tx_slot = NXT_TX_SLOT(slot);
++	if (unlikely(slot == NUM_TX_BUFF - 1)) ctrl |= MAL_TX_CTRL_WRAP;  // set WRAP on last slot
 +	DBG2(dev, "xmit(%u) %d\n" NL, len, slot);
  	dev->tx_skb[slot] = skb;
 -	dev->tx_desc[slot].data_ptr = dma_map_single(&dev->ofdev->dev,
 -						     skb->data, len,
 -						     DMA_TO_DEVICE);
-+	dev->tx_desc[slot].data_ptr = dma_map_single(&dev->ofdev->dev, skb->data, EMAC_DMA_ALIGN(len), DMA_TO_DEVICE);
- 	dev->tx_desc[slot].data_len = (u16) len;
+-	dev->tx_desc[slot].data_len = (u16) len;
++    desc->data_ptr = dma_map_single(dev->ofdev_dev, skb->data, len, DMA_TO_DEVICE);
++    desc->data_len = (u16) len;
  	wmb();
- 	dev->tx_desc[slot].ctrl = ctrl;
-@@ -1465,19 +1332,15 @@
+-	dev->tx_desc[slot].ctrl = ctrl;
++    desc->ctrl = ctrl;
+ 
+-	return emac_xmit_finish(dev, len);
++	return emac_xmit_finish(dev, dev->ndev, len);
  }
  
- static inline int emac_xmit_split(struct emac_instance *dev, int slot,
+-static inline int emac_xmit_split(struct emac_instance *dev, int slot,
 -				  u32 pd, int len, int last, u16 base_ctrl)
 -{
-+				  u32 pd, int len, int last, u16 base_ctrl) {
- 	while (1) {
+-	while (1) {
 -		u16 ctrl = base_ctrl;
-+		u16 ctrl = base_ctrl | MAL_TX_CTRL_INTR;
- 		int chunk = min(len, MAL_MAX_TX_SIZE);
- 		len -= chunk;
+-		int chunk = min(len, MAL_MAX_TX_SIZE);
+-		len -= chunk;
++static int emac_start_xmit(struct sk_buff *skb, struct net_device *ndev) {
++    return _emac_start_xmit(skb, netdev_priv(ndev), skb->len);
++}
  
 -		slot = (slot + 1) % NUM_TX_BUFF;
--
++static inline int emac_xmit_split(struct emac_instance *dev, int slot, 
++				  u32 pd, int len, int last, u16 base_ctrl) {
++    struct mal_descriptor *desc = &dev->tx_desc[slot];
++    while (1) {
++		u16 ctrl = base_ctrl | MAL_TX_CTRL_INTR;
++		int chunk = min(len, MAL_MAX_TX_SIZE);
++  		len -= chunk;
+ 
 -		if (last && !len)
 -			ctrl |= MAL_TX_CTRL_LAST;
 -		if (slot == NUM_TX_BUFF - 1)
 -			ctrl |= MAL_TX_CTRL_WRAP;
 +		slot = NXT_TX_SLOT(slot);
 +		if (last && !len) ctrl |= MAL_TX_CTRL_LAST;
-+		if (slot == NUM_TX_BUFF - 1) ctrl |= MAL_TX_CTRL_WRAP;
++		if (unlikely(slot == NUM_TX_BUFF - 1)) ctrl |= MAL_TX_CTRL_WRAP;
  
  		dev->tx_skb[slot] = NULL;
- 		dev->tx_desc[slot].data_ptr = pd;
-@@ -1485,64 +1348,58 @@
- 		dev->tx_desc[slot].ctrl = ctrl;
+-		dev->tx_desc[slot].data_ptr = pd;
+-		dev->tx_desc[slot].data_len = (u16) chunk;
+-		dev->tx_desc[slot].ctrl = ctrl;
++        desc = &dev->tx_desc[slot];
++		desc->data_ptr = pd;
++		desc->data_len = (u16) chunk;
++		desc->ctrl = ctrl;
  		++dev->tx_cnt;
  
 -		if (!len)
 -			break;
 -
-+		if (!len) break;
++		if (!len) return slot;
  		pd += chunk;
  	}
- 	return slot;
+-	return slot;
  }
  
  /* Tx lock BH disabled (SG version for TAH equipped EMACs) */
 -static int emac_start_xmit_sg(struct sk_buff *skb, struct net_device *ndev)
 -{
-+/* Transmit the packet using specified transmit queue */
-+static int emac_start_xmit_sg(struct sk_buff *skb, struct net_device *ndev) {
- 	struct emac_instance *dev = netdev_priv(ndev);
- 	int nr_frags = skb_shinfo(skb)->nr_frags;
+-	struct emac_instance *dev = netdev_priv(ndev);
+-	int nr_frags = skb_shinfo(skb)->nr_frags;
 -	int len = skb->len, chunk;
 -	int slot, i;
 -	u16 ctrl;
--	u32 pd;
-+	register int len = skb->len, chunk, slot, i;
++/* Transmit the packet using specified transmit queue */
++static int emac_start_xmit_sg(struct sk_buff *skb, struct net_device *ndev) {
++    register struct emac_instance *dev = netdev_priv(ndev);
++ 	int nr_frags = skb_shinfo(skb)->nr_frags;
++	register unsigned int len = skb->len;
++ 	register int slot;
++    register int chunk, slot_prev, i;
 +	register u16 ctrl;
-+	register u32 pd;
+ 	u32 pd;
  
  	/* This is common "fast" path */
 -	if (likely(!nr_frags && len <= MAL_MAX_TX_SIZE))
 -		return emac_start_xmit(skb, ndev);
-+	if (likely(!nr_frags && len <= MAL_MAX_TX_SIZE)) return emac_start_xmit(skb, ndev);
++	if (likely(!nr_frags) && likely(len <= MAL_MAX_TX_SIZE)) return _emac_start_xmit(skb, dev, len);
++    //if ((cnt1 % 200)) printk(KERN_INFO "eth0: cnt1:%d, cnt2:%d, cnt3:%d\n", cnt1, cnt2, cnt3);
 +
 +#ifdef CONFIG_IBM_EMAC_MASK_CEXT
 +	if (atomic_read(&dev->mask_cext_enable))
@@ -1499,29 +1591,33 @@
 -	 * slots because of the additional fragmentation into
 -	 * MAL_MAX_TX_SIZE-sized chunks
 -	 */
+-	if (unlikely(dev->tx_cnt + nr_frags + mal_tx_chunks(len) > NUM_TX_BUFF))
 +	/* Note, this is only an *estimation*, we can still run out of empty slots because
 +	 * of the additional fragmentation into MAL_MAX_TX_SIZE-sized chunks */
- 	if (unlikely(dev->tx_cnt + nr_frags + mal_tx_chunks(len) > NUM_TX_BUFF))
++	if (unlikely(dev->tx_cnt + nr_frags + MAL_ESTIMATE_TX_CHUNKS(len) > NUM_TX_BUFF))
  		goto stop_queue;
  
 -	ctrl = EMAC_TX_CTRL_GFCS | EMAC_TX_CTRL_GP | MAL_TX_CTRL_READY |
 -	    emac_tx_csum(dev, skb);
+-	slot = dev->tx_slot;
 +	ctrl = EMAC_TX_CTRL_GFCS| EMAC_TX_CTRL_GP| MAL_TX_CTRL_READY| MAL_TX_CTRL_INTR| emac_tx_csum(dev, skb);
- 	slot = dev->tx_slot;
++	slot = slot_prev = dev->tx_slot;
  
  	/* skb data */
  	dev->tx_skb[slot] = NULL;
- 	chunk = min(len, MAL_MAX_TX_SIZE);
+-	chunk = min(len, MAL_MAX_TX_SIZE);
++	chunk = (likely(len <= MAL_MAX_TX_SIZE)) ? len : MAL_MAX_TX_SIZE;
  	dev->tx_desc[slot].data_ptr = pd =
 -	    dma_map_single(&dev->ofdev->dev, skb->data, len, DMA_TO_DEVICE);
-+	    dma_map_single(&dev->ofdev->dev, skb->data, EMAC_DMA_ALIGN(len), DMA_TO_DEVICE);
++	    dma_map_single(dev->ofdev_dev, skb->data, SKB_DATA_ALIGN(len), DMA_TO_DEVICE);
  	dev->tx_desc[slot].data_len = (u16) chunk;
  	len -= chunk;
- 	if (unlikely(len))
+-	if (unlikely(len))
 -		slot = emac_xmit_split(dev, slot, pd + chunk, len, !nr_frags,
 -				       ctrl);
-+		slot = emac_xmit_split(dev, slot, pd + chunk, len, !nr_frags, ctrl);
- 	/* skb fragments */
+-	/* skb fragments */
++	if (unlikely(len)) slot = emac_xmit_split(dev, slot, pd + chunk, len, !nr_frags, ctrl);
++    /* skb fragments */
  	for (i = 0; i < nr_frags; ++i) {
  		struct skb_frag_struct *frag = &skb_shinfo(skb)->frags[i];
  		len = skb_frag_size(frag);
@@ -1534,25 +1630,27 @@
 -
 -		slot = emac_xmit_split(dev, slot, pd, len, i == nr_frags - 1,
 -				       ctrl);
-+		if (unlikely(dev->tx_cnt + mal_tx_chunks(len) >= NUM_TX_BUFF)) goto undo_frame;
-+		pd = skb_frag_dma_map(&dev->ofdev->dev, frag, 0, len, DMA_TO_DEVICE);
++		if (unlikely(dev->tx_cnt + MAL_ESTIMATE_TX_CHUNKS(len) >= NUM_TX_BUFF)) goto undo_frame;
++		pd = skb_frag_dma_map(dev->ofdev_dev, frag, 0, len, DMA_TO_DEVICE);
 +		slot = emac_xmit_split(dev, slot, pd, len, i == nr_frags - 1, ctrl);
  	}
  
  	DBG2(dev, "xmit_sg(%u) %d - %d" NL, skb->len, dev->tx_slot, slot);
-@@ -1551,23 +1408,19 @@
+@@ -1551,23 +1397,19 @@
  	dev->tx_skb[slot] = skb;
  
  	/* Send the packet out */
 -	if (dev->tx_slot == NUM_TX_BUFF - 1)
 -		ctrl |= MAL_TX_CTRL_WRAP;
-+	if (unlikely(dev->tx_slot == NUM_TX_BUFF - 1)) ctrl |= MAL_TX_CTRL_WRAP;
++	if (unlikely(slot_prev == NUM_TX_BUFF - 1)) ctrl |= MAL_TX_CTRL_WRAP;
  	wmb();
- 	dev->tx_desc[dev->tx_slot].ctrl = ctrl;
+-	dev->tx_desc[dev->tx_slot].ctrl = ctrl;
 -	dev->tx_slot = (slot + 1) % NUM_TX_BUFF;
++	dev->tx_desc[slot_prev].ctrl = ctrl;
 +	dev->tx_slot = NXT_TX_SLOT(slot);
  
- 	return emac_xmit_finish(dev, skb->len);
+-	return emac_xmit_finish(dev, skb->len);
++	return emac_xmit_finish(dev, ndev, skb->len);
  
   undo_frame:
 -	/* Well, too bad. Our previous estimation was overly optimistic.
@@ -1569,9 +1667,11 @@
  	}
  	++dev->estats.tx_undo;
  
-@@ -1578,220 +1431,223 @@
+@@ -1577,240 +1419,239 @@
+ 	return NETDEV_TX_BUSY;
  }
  
++#if !defined (CONFIG_APM821xx) // Moved to mal.c
  /* Tx lock BHs */
 -static void emac_parse_tx_error(struct emac_instance *dev, u16 ctrl)
 -{
@@ -1644,21 +1744,13 @@
  				dev->tx_skb[slot] = NULL;
  			}
 -			slot = (slot + 1) % NUM_TX_BUFF;
-+			slot = NXT_TX_SLOT(slot);
-+#ifdef CONFIG_IBM_EMAC_TAH
-+			if (unlikely(ctrl & EMAC_IS_BAD_TX_TAH)) emac_parse_tx_error(dev, ctrl);
-+#else
-+			if (unlikely(ctrl & EMAC_IS_BAD_TX)) emac_parse_tx_error(dev, ctrl);
-+#endif
- 
+-
 -			if (unlikely(ctrl & bad_mask))
 -				emac_parse_tx_error(dev, ctrl);
++			slot = NXT_TX_SLOT(slot);
++			if (unlikely(ctrl & EMAC_IS_BAD_TX)) emac_parse_tx_error(dev, ctrl);
 +			if (--dev->tx_cnt) goto again;
- 
--			if (--dev->tx_cnt)
--				goto again;
--		}
--		if (n) {
++
 +#ifdef CONFIG_IBM_EMAC_MASK_CEXT
 +			else {
 +				DBG(dev, "Testing for idle... " NL);
@@ -1672,7 +1764,11 @@
 +			}
 +#endif
 +		} 
-+
+ 
+-			if (--dev->tx_cnt)
+-				goto again;
+-		}
+-		if (n) {
 +		if (likely(n)) {
  			dev->ack_slot = slot;
 -			if (netif_queue_stopped(dev->ndev) &&
@@ -1697,6 +1793,13 @@
 +#endif
  	netif_tx_unlock_bh(dev->ndev);
  }
+ 
+-static inline void emac_recycle_rx_skb(struct emac_instance *dev, int slot,
+-				       int len)
+-{
+-	struct sk_buff *skb = dev->rx_skb[slot];
+-
+-	DBG2(dev, "recycle %d %d" NL, slot, len);
 +/*
 +#define EMAC_RECYCLE_RX_SKB(dev, slot, len, skbdata) \
 +	if (len) dma_map_single(&dev->ofdev->dev, skbdata-2, EMAC_DMA_ALIGN(len+2), DMA_FROM_DEVICE);\
@@ -1705,21 +1808,15 @@
 +	dev->rx_desc[slot].ctrl = MAL_RX_CTRL_EMPTY | MAL_RX_CTRL_INTR |(slot == (NUM_RX_BUFF-1) ? MAL_RX_CTRL_WRAP:0);
 +*/
  
--static inline void emac_recycle_rx_skb(struct emac_instance *dev, int slot,
--				       int len)
--{
--	struct sk_buff *skb = dev->rx_skb[slot];
-+static __always_inline void emac_recycle_rx_skb(struct emac_instance *dev, int slot, int len, unsigned char* skbdata) {
-+	//struct sk_buff *skb = dev->rx_skb[slot];
- 
- 	DBG2(dev, "recycle %d %d" NL, slot, len);
--
 -	if (len)
 -		dma_map_single(&dev->ofdev->dev, skb->data - 2,
 -			       EMAC_DMA_ALIGN(len + 2), DMA_FROM_DEVICE);
--
++static __always_inline void emac_recycle_rx_skb(struct emac_instance *dev, int slot, int len, unsigned char* skbdata) {
++	//struct sk_buff *skb = dev->rx_skb[slot];
+ 
++	DBG2(dev, "recycle %d %d" NL, slot, len);
 +	if (likely(len))
-+		dma_map_single(&dev->ofdev->dev, skbdata - 2, EMAC_DMA_ALIGN(len + 2), DMA_FROM_DEVICE);
++		dma_map_single(dev->ofdev_dev, skbdata - NET_IP_ALIGN, SKB_DATA_ALIGN(len + NET_IP_ALIGN), DMA_FROM_DEVICE);
  	dev->rx_desc[slot].data_len = 0;
  	wmb();
 -	dev->rx_desc[slot].ctrl = MAL_RX_CTRL_EMPTY |
@@ -1780,43 +1877,46 @@
  
 -static inline int emac_rx_sg_append(struct emac_instance *dev, int slot)
 -{
+-	if (likely(dev->rx_sg_skb != NULL)) {
+-		int len = dev->rx_desc[slot].data_len;
+-		int tot_len = dev->rx_sg_skb->len + len;
 +/* ECO: local version of skb_put for performance reasons */
 +#define skb_tail_pointer(skb) (skb)->tail
 +#define skb_putl(skb, len) SKB_LINEAR_ASSERT(skb); skb->tail += len; skb->len  += len;
-+/*
-+static __always_inline void *skb_putl(struct sk_buff *skb, unsigned int len) {
-+	SKB_LINEAR_ASSERT(skb);
-+	skb->tail += len;
-+	skb->len  += len;
-+	return skb_tail_pointer(skb);
-+}
-+*/
-+static __always_inline int emac_rx_sg_append(struct emac_instance *dev, int slot, int len, unsigned char *data) {
- 	if (likely(dev->rx_sg_skb != NULL)) {
--		int len = dev->rx_desc[slot].data_len;
++
++// emac_rx_sg_append was returning 0 and -1, used in ONLY in NOT comparisons --> invert return values 
++static __always_inline int emac_rx_sg_append(struct emac_instance *dev, int slot, int len, 
++    unsigned char *data, struct sk_buff **skb_sg) {
++    struct sk_buff *skb_sgp = *skb_sg;
++	if (likely(skb_sgp != NULL)) {
 +		//int len = dev->rx_desc[slot].data_len;
- 		int tot_len = dev->rx_sg_skb->len + len;
++		int tot_len = skb_sgp->len + len;
  
- 		if (unlikely(tot_len + 2 > dev->rx_skb_size)) {
+-		if (unlikely(tot_len + 2 > dev->rx_skb_size)) {
++		if (unlikely(tot_len + NET_IP_ALIGN > dev->rx_skb_size)) {
  			++dev->estats.rx_dropped_mtu;
- 			dev_kfree_skb(dev->rx_sg_skb);
- 			dev->rx_sg_skb = NULL;
+-			dev_kfree_skb(dev->rx_sg_skb);
+-			dev->rx_sg_skb = NULL;
 -		} else {
 -			memcpy(skb_tail_pointer(dev->rx_sg_skb),
 -					 dev->rx_skb[slot]->data, len);
 -			skb_put(dev->rx_sg_skb, len);
 -			emac_recycle_rx_skb(dev, slot, len);
+-			return 0;
++			dev_kfree_skb(skb_sgp);
++            skb_sg = NULL;
 +		} else {  //ECO
 +			//if(unlikely((dev->rx_sg_skb->tail + len) > dev->rx_sg_skb->end)) goto out;
-+			memcpy(skb_tail_pointer(dev->rx_sg_skb), data, len);	// dev->rx_skb[slot]->data
-+			skb_putl(dev->rx_sg_skb, len);
++			memcpy(skb_tail_pointer(skb_sgp), data, len);	// dev->rx_skb[slot]->data
++			skb_putl(skb_sgp, len);
 +			emac_recycle_rx_skb(dev, slot, len, data);	//dev->rx_skb[slot]->data
- 			return 0;
++			return 1;
  		}
  	}
 -	emac_recycle_rx_skb(dev, slot, 0);
+-	return -1;
 +	emac_recycle_rx_skb(dev, slot, 0, dev->rx_skb[slot]->data);
- 	return -1;
++	return 0;
  }
  
  /* NAPI poll context */
@@ -1828,7 +1928,7 @@
 +	register struct emac_instance *dev = param;
 +	register int slot = dev->rx_slot, received = 0;
 +	register int len;
-+	register struct sk_buff *skb;
++	register struct sk_buff *skb, **skb_sg;
  
  	DBG2(dev, "poll_rx(%d)" NL, budget);
  
@@ -1874,20 +1974,20 @@
 -			    alloc_skb(len + EMAC_RX_SKB_HEADROOM + 2, GFP_ATOMIC);
 -			if (unlikely(!copy_skb))
 -				goto oom;
-+		//if (len && len < EMAC_RX_COPY_THRESH) {
-+		if (len < EMAC_RX_COPY_THRESH) {
-+			struct sk_buff *copy_skb = alloc_skb(len + EMAC_RX_SKB_HEADROOM + 2, GFP_ATOMIC);
-+			if (unlikely(!copy_skb)) goto oom;
- 
- 			skb_reserve(copy_skb, EMAC_RX_SKB_HEADROOM + 2);
+-
+-			skb_reserve(copy_skb, EMAC_RX_SKB_HEADROOM + 2);
 -			memcpy(copy_skb->data - 2, skb->data - 2, len + 2);
 -			emac_recycle_rx_skb(dev, slot, len);
-+			memcpy(copy_skb->data - 2, skb->data - 2, len + 2);  //is cacheable_memcpy
++		if (len < EMAC_RX_COPY_THRESH) {
++			struct sk_buff *copy_skb = napi_alloc_skb(&dev->mal->napi, len);
++			if (unlikely(!copy_skb)) goto oom;
++
++			memcpy(copy_skb->data - NET_IP_ALIGN, skb->data - NET_IP_ALIGN, len + NET_IP_ALIGN);  //is cacheable_memcpy
 +			emac_recycle_rx_skb(dev, slot, len, skb->data);
  			skb = copy_skb;
 -		} else if (unlikely(emac_alloc_rx_skb(dev, slot, GFP_ATOMIC)))
 -			goto oom;
-+		} else if (unlikely(emac_alloc_rx_skb(dev, slot, GFP_ATOMIC))) goto oom;
++		} else if (unlikely(alloc_rx_skb_napi(dev, slot))) goto oom;
  
 -		skb_put(skb, len);
 +		skb_putl(skb, len); //ECO: local version of skb_put
@@ -1907,25 +2007,41 @@
  		--budget;
  		++received;
  		continue;
-@@ -1801,14 +1657,12 @@
- 			if (unlikely(emac_alloc_rx_skb(dev, slot, GFP_ATOMIC))) {
+ 	sg:
++        skb_sg = &dev->rx_sg_skb;
++        // ECO TODO test if unlikely
+ 		if (ctrl & MAL_RX_CTRL_FIRST) {
+-			BUG_ON(dev->rx_sg_skb);
+-			if (unlikely(emac_alloc_rx_skb(dev, slot, GFP_ATOMIC))) {
++			//BUG_ON(dev->rx_sg_skb); // panic is not really helpful here
++			if (unlikely(alloc_rx_skb_napi(dev, slot))) {
  				DBG(dev, "rx OOM %d" NL, slot);
  				++dev->estats.rx_dropped_oom;
 -				emac_recycle_rx_skb(dev, slot, 0);
 +				emac_recycle_rx_skb(dev, slot, 0, skb->data);
++                goto skip;
  			} else {
- 				dev->rx_sg_skb = skb;
+-				dev->rx_sg_skb = skb;
 -				skb_put(skb, len);
++				//dev->rx_sg_skb = skb;
++                *skb_sg = skb;
 +				skb_putl(skb, len);
++                goto skip;
  			}
 -		} else if (!emac_rx_sg_append(dev, slot) &&
 -			   (ctrl & MAL_RX_CTRL_LAST)) {
 -
-+		} else if (!emac_rx_sg_append(dev, slot, len, skb->data) && (ctrl & MAL_RX_CTRL_LAST)) {
- 			skb = dev->rx_sg_skb;
- 			dev->rx_sg_skb = NULL;
+-			skb = dev->rx_sg_skb;
+-			dev->rx_sg_skb = NULL;
++		} else if (emac_rx_sg_append(dev, slot, len, skb->data, skb_sg) && (ctrl & MAL_RX_CTRL_LAST)) {
++			//skb = dev->rx_sg_skb;
++            //dev->rx_sg_skb = NULL;
++            skb = *skb_sg;
++            *skb_sg = NULL; 			
  
-@@ -1818,15 +1672,14 @@
+ 			ctrl &= EMAC_BAD_RX_MASK;
+ 			if (unlikely(ctrl && ctrl != EMAC_RX_TAH_BAD_CSUM)) {
+@@ -1818,15 +1659,14 @@
  				++dev->estats.rx_dropped_error;
  				dev_kfree_skb(skb);
  				len = 0;
@@ -1943,7 +2059,7 @@
  		goto next;
  	}
  
-@@ -1859,46 +1712,33 @@
+@@ -1859,47 +1699,36 @@
  }
  
  /* NAPI poll context */
@@ -1962,7 +2078,8 @@
  	struct emac_instance *dev = param;
 -
 -	int slot = dev->rx_slot;
-+	register int slot = dev->rx_slot;
++	register int slot = dev->rx_slot;  // start with last used slot
++    register u16 *rx_desc_ctrl = (u16 *)&dev->rx_desc[slot];
  	while (1) {
 -		u16 ctrl = dev->rx_desc[slot].ctrl;
 -		if (ctrl & MAL_RX_CTRL_EMPTY)
@@ -1975,13 +2092,14 @@
 -		/* I'm just being paranoid here :) */
 -		if (unlikely(slot == dev->rx_slot))
 -			return 0;
-+		register u16 ctrl = dev->rx_desc[slot].ctrl;
-+		if (unlikely(ctrl & MAL_RX_CTRL_EMPTY)) return 0;
-+		else if (unlikely(ctrl & MAL_RX_CTRL_LAST)) return 1;
++        if (*rx_desc_ctrl & MAL_RX_CTRL_EMPTY) return 0;
++		if (unlikely(*rx_desc_ctrl & MAL_RX_CTRL_LAST)) return 1;
 +		slot = NXT_RX_SLOT(slot);
-+		//if (unlikely(slot == dev->rx_slot))	return 0;		// Paranoid ?
++        rx_desc_ctrl += sizeof(struct mal_descriptor);
++        if (unlikely(slot == 0)) rx_desc_ctrl = (u16 *) &dev->rx_desc[0]; //wrap around
  	}
  }
++#endif // Moved to mal.c
  
  /* Hard IRQ */
 -static void emac_rxde(void *param)
@@ -1996,15 +2114,15 @@
  /* Hard IRQ */
 -static irqreturn_t emac_irq(int irq, void *dev_instance)
 -{
+-	struct emac_instance *dev = dev_instance;
 +static irqreturn_t emac_irq(int irq, void *dev_instance) {
- 	struct emac_instance *dev = dev_instance;
++ 	struct emac_instance *dev = dev_instance;
  	struct emac_regs __iomem *p = dev->emacp;
  	struct emac_error_stats *st = &dev->estats;
-@@ -1910,45 +1750,32 @@
- 	out_be32(&p->isr, isr);
+ 	u32 isr;
+@@ -1911,44 +1740,30 @@
  
  	DBG(dev, "isr = %08x" NL, isr);
-+	printk(KERN_ERR "%s: isr = %08x\n", __func__, isr);
  
 -	if (isr & EMAC4_ISR_TXPE)
 -		++st->tx_parity;
@@ -2037,7 +2155,7 @@
 -	if (isr & EMAC_ISR_TE)
 -		++st->tx_errors;
 -
-+	if (isr & EMAC4_ISR_TXPE)	++st->tx_parity;
++ 	if (isr & EMAC4_ISR_TXPE)	++st->tx_parity;
 +	if (isr & EMAC4_ISR_RXPE)	++st->rx_parity;
 +	if (isr & EMAC4_ISR_TXUE)	++st->tx_underrun;
 +	if (isr & EMAC4_ISR_RXOE)	++st->rx_fifo_overrun;
@@ -2066,7 +2184,7 @@
  	struct emac_instance *dev = netdev_priv(ndev);
  	struct emac_stats *st = &dev->stats;
  	struct emac_error_stats *est = &dev->estats;
-@@ -1963,39 +1790,24 @@
+@@ -1963,61 +1778,48 @@
  	nst->rx_bytes = (unsigned long)st->rx_bytes;
  	nst->tx_packets = (unsigned long)st->tx_packets;
  	nst->tx_bytes = (unsigned long)st->tx_bytes;
@@ -2117,7 +2235,23 @@
  	spin_unlock_irqrestore(&dev->lock, flags);
  	return nst;
  }
-@@ -2015,9 +1827,7 @@
+ 
+ static struct mal_commac_ops emac_commac_ops = {
++#if !defined (CONFIG_APM821xx) // Moved to mal.c
+ 	.poll_tx = &emac_poll_tx,
+ 	.poll_rx = &emac_poll_rx,
+ 	.peek_rx = &emac_peek_rx,
++#endif
+ 	.rxde = &emac_rxde,
+ };
+ 
+ static struct mal_commac_ops emac_commac_sg_ops = {
++#if !defined (CONFIG_APM821xx) // Moved to mal.c
+ 	.poll_tx = &emac_poll_tx,
+ 	.poll_rx = &emac_poll_rx,
+ 	.peek_rx = &emac_peek_rx_sg,
++#endif
+ 	.rxde = &emac_rxde,
  };
  
  /* Ethtool support */
@@ -2128,7 +2262,7 @@
  	struct emac_instance *dev = netdev_priv(ndev);
  	u32 supported, advertising;
  
-@@ -2032,84 +1842,54 @@
+@@ -2032,84 +1834,54 @@
  	cmd->base.duplex = dev->phy.duplex;
  	mutex_unlock(&dev->link_lock);
  
@@ -2234,7 +2368,7 @@
  		mutex_unlock(&dev->link_lock);
  	}
  	emac_force_link_update(dev);
-@@ -2117,16 +1897,12 @@
+@@ -2117,16 +1889,12 @@
  	return 0;
  }
  
@@ -2253,7 +2387,7 @@
  	struct emac_instance *dev = netdev_priv(ndev);
  
  	mutex_lock(&dev->link_lock);
-@@ -2135,56 +1911,41 @@
+@@ -2135,56 +1903,41 @@
  		pp->autoneg = 1;
  
  	if (dev->phy.duplex == DUPLEX_FULL) {
@@ -2324,7 +2458,7 @@
  	struct emac_instance *dev = netdev_priv(ndev);
  	struct emac_ethtool_regs_hdr *hdr = buf;
  
-@@ -2207,15 +1968,12 @@
+@@ -2207,15 +1960,12 @@
  	}
  }
  
@@ -2342,7 +2476,7 @@
  
  	mutex_lock(&dev->link_lock);
  	if (!dev->phy.autoneg) {
-@@ -2230,25 +1988,17 @@
+@@ -2230,25 +1980,17 @@
  	return res;
  }
  
@@ -2374,7 +2508,7 @@
  	struct emac_instance *dev = netdev_priv(ndev);
  
  	memcpy(tmp_stats, &dev->stats, sizeof(dev->stats));
-@@ -2256,9 +2006,7 @@
+@@ -2256,9 +1998,7 @@
  	memcpy(tmp_stats, &dev->estats, sizeof(dev->estats));
  }
  
@@ -2385,7 +2519,7 @@
  	struct emac_instance *dev = netdev_priv(ndev);
  
  	strlcpy(info->driver, "ibm_emac", sizeof(info->driver));
-@@ -2267,6 +2015,34 @@
+@@ -2267,6 +2007,34 @@
  		 dev->cell_index, dev->ofdev->dev.of_node);
  }
  
@@ -2420,7 +2554,7 @@
  static const struct ethtool_ops emac_ethtool_ops = {
  	.get_drvinfo = emac_ethtool_get_drvinfo,
  
-@@ -2285,33 +2061,323 @@
+@@ -2285,33 +2053,225 @@
  	.get_link = ethtool_op_get_link,
  	.get_link_ksettings = emac_ethtool_get_link_ksettings,
  	.set_link_ksettings = emac_ethtool_set_link_ksettings,
@@ -2462,31 +2596,30 @@
 +	return sprintf(buf, "%d\n", dev_ins->mal->coales_param[0].rx_time);
 +}
 +
-+static int core_reset(struct emac_instance * dev_ins) {
-+	mutex_lock(&dev_ins->link_lock);
-+	emac_netif_stop(dev_ins);
-+	emac_rx_disable(dev_ins);
-+	mal_disable_rx_channel(dev_ins->mal, dev_ins->mal_rx_chan);
-+	if (dev_ins->rx_sg_skb) {
-+		++dev_ins->estats.rx_dropped_resize;
-+		dev_kfree_skb(dev_ins->rx_sg_skb);
-+		dev_ins->rx_sg_skb = NULL;
++static int core_reset(struct emac_instance * dev) {
++	mutex_lock(&dev->link_lock);
++	emac_netif_stop(dev);
++	emac_rx_disable(dev);
++	mal_disable_rx_channel(dev->mal, dev->mal_rx_chan);
++	if (dev->rx_sg_skb) {
++		++dev->estats.rx_dropped_resize;
++		dev_kfree_skb(dev->rx_sg_skb);
++		dev->rx_sg_skb = NULL;
 +	}
 +	/* This is to prevent starting RX channel in emac_rx_enable() */
-+	set_bit(MAL_COMMAC_RX_STOPPED, &dev_ins->commac.flags);
-+	emac_full_tx_reset(dev_ins);	/* Restart RX */
-+	clear_bit(MAL_COMMAC_RX_STOPPED, &dev_ins->commac.flags);
-+	dev_ins->rx_slot = 0;	
-+	mal_enable_rx_channel(dev_ins->mal, dev_ins->mal_rx_chan);
-+	emac_rx_enable(dev_ins);
-+	emac_netif_start(dev_ins);
-+	mutex_unlock(&dev_ins->link_lock);
++	set_bit(MAL_COMMAC_RX_STOPPED, &dev->commac.flags);
++	emac_full_tx_reset(dev);	/* Restart RX */
++	clear_bit(MAL_COMMAC_RX_STOPPED, &dev->commac.flags);
++	dev->rx_slot = 0;	
++	mal_enable_rx_channel(dev->mal, dev->mal_rx_chan);
++	emac_rx_enable(dev);
++	emac_netif_start(dev);
++	mutex_unlock(&dev->link_lock);
 +	return 0;
 +}
 +
 +/* Set interrupt coalesce parametters values */
-+static ssize_t store_tx_count(struct device *dev, struct device_attribute *attr,
-+	const char *buf, size_t count) {
++static ssize_t store_tx_count(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
 +	struct net_device *ndev = to_net_dev(dev);
 +	struct emac_instance *dev_ins = netdev_priv(ndev);
 +	
@@ -2499,8 +2632,7 @@
 +	if (netif_running(dev_ins->ndev)) core_reset(dev_ins);
 +	return count;
 +}
-+static ssize_t store_rx_count(struct device *dev, struct device_attribute *attr,
-+	const char *buf, size_t count) {
++static ssize_t store_rx_count(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
 +	struct net_device *ndev = to_net_dev(dev);
 +	struct emac_instance *dev_ins = netdev_priv(ndev);
 +
@@ -2514,8 +2646,7 @@
 +	return count;
 +}
 +
-+static ssize_t store_tx_time(struct device *dev, struct device_attribute *attr,
-+	const char *buf, size_t count) {
++static ssize_t store_tx_time(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
 +	struct net_device *ndev = to_net_dev(dev);
 +	struct emac_instance *dev_ins = netdev_priv(ndev);
 +
@@ -2529,8 +2660,7 @@
 +	return count;
 +}
 +
-+static ssize_t store_rx_time(struct device *dev, struct device_attribute *attr,
-+	const char *buf, size_t count) {
++static ssize_t store_rx_time(struct device *dev, struct device_attribute *attr,	const char *buf, size_t count) {
 +	struct net_device *ndev = to_net_dev(dev);
 +	struct emac_instance *dev_ins = netdev_priv(ndev);
 +
@@ -2571,118 +2701,33 @@
 +#endif
 +
 +#if defined(CONFIG_IBM_EMAC_TAH)
-+static ssize_t show_tah_ssr0(struct device *dev, struct device_attribute *attr, char *buf) {
++static ssize_t show_tah_ssr(struct device *dev, struct device_attribute *attr, char *buf) {
 +	struct net_device *ndev = to_net_dev(dev);
 +	struct emac_instance *dev_ins = netdev_priv(ndev);
-+	if (emac_has_feature(dev_ins, EMAC_FTR_HAS_TAH))
-+		return sprintf(buf, "%d\n", TAH_SSR_2_SS(tah_get_ssr(dev_ins->tah_dev, 0)) << 1);
-+	return 0;
-+}
-+
-+static ssize_t store_tah_ssr0(struct device *dev, struct device_attribute *attr,
-+	 const char *buf, size_t count) {
-+	struct net_device *ndev = to_net_dev(dev);
-+	struct emac_instance *dev_ins = netdev_priv(ndev);
-+
-+	long tmp = simple_strtol(buf, NULL, 10);
-+	if (emac_has_feature(dev_ins, EMAC_FTR_HAS_TAH)) tah_set_ssr(dev_ins->tah_dev, 0, tmp);	
-+	return count;
-+}
-+
-+static ssize_t show_tah_ssr1(struct device *dev, struct device_attribute *attr, char *buf) {
-+	struct net_device *ndev = to_net_dev(dev);
-+	struct emac_instance *dev_ins = netdev_priv(ndev);
++    char tah_char = attr->attr.name[strlen(attr->attr.name) - 1];  // last character
++    u32 tah_index = (isodigit(tah_char)) ? tah_char - '0': 0;  // converted to digit
 +
 +	if (emac_has_feature(dev_ins, EMAC_FTR_HAS_TAH))
-+		return sprintf(buf, "%d\n", TAH_SSR_2_SS(tah_get_ssr(dev_ins->tah_dev, 1)) << 1);
++		return sprintf(buf, "%d\n", TAH_SSR_2_SS(tah_get_ssr(dev_ins->tah_dev, tah_index)) << 1);
 +	return 0;
-+}
++} 
 +
-+static ssize_t store_tah_ssr1(struct device *dev, struct device_attribute *attr,
-+	const char *buf, size_t count) {
++static ssize_t store_tah_ssr(struct device *dev, struct device_attribute *attr,	const char *buf, size_t count) {
 +	struct net_device *ndev = to_net_dev(dev);
 +	struct emac_instance *dev_ins = netdev_priv(ndev);
++    char tah_char = attr->attr.name[strlen(attr->attr.name) - 1];  // last character
++    u32 tah_index = (isodigit(tah_char)) ? tah_char - '0': 0;  // converted to digit
 +
 +	long tmp = simple_strtol(buf, NULL, 10);
-+	if (emac_has_feature(dev_ins, EMAC_FTR_HAS_TAH)) tah_set_ssr(dev_ins->tah_dev, 1, tmp);	
++	if (emac_has_feature(dev_ins, EMAC_FTR_HAS_TAH)) tah_set_ssr(dev_ins->tah_dev, tah_index, tmp);	
 +	return count;
 +}
-+
-+static ssize_t show_tah_ssr2(struct device *dev, struct device_attribute *attr, char *buf) {
-+	struct net_device *ndev = to_net_dev(dev);
-+	struct emac_instance *dev_ins = netdev_priv(ndev);
-+
-+	if (emac_has_feature(dev_ins, EMAC_FTR_HAS_TAH))
-+		return sprintf(buf, "%d\n", TAH_SSR_2_SS(tah_get_ssr(dev_ins->tah_dev, 2)) << 1);
-+	return 0;
-+}
-+
-+static ssize_t store_tah_ssr2(struct device *dev, struct device_attribute *attr,
-+	const char *buf, size_t count) {
-+	struct net_device *ndev = to_net_dev(dev);
-+	struct emac_instance *dev_ins = netdev_priv(ndev);
-+
-+	long tmp = simple_strtol(buf, NULL, 10);
-+	if (emac_has_feature(dev_ins, EMAC_FTR_HAS_TAH)) tah_set_ssr(dev_ins->tah_dev, 2, tmp);	
-+	return count;
-+}
-+
-+static ssize_t show_tah_ssr3(struct device *dev, struct device_attribute *attr, char *buf) {
-+	struct net_device *ndev = to_net_dev(dev);
-+	struct emac_instance *dev_ins = netdev_priv(ndev);
-+
-+	if (emac_has_feature(dev_ins, EMAC_FTR_HAS_TAH))
-+		return sprintf(buf, "%d\n", TAH_SSR_2_SS(tah_get_ssr(dev_ins->tah_dev, 3)) << 1);
-+	return 0;
-+}
-+
-+static ssize_t store_tah_ssr3(struct device *dev, struct device_attribute *attr,
-+	const char *buf, size_t count) {
-+	struct net_device *ndev = to_net_dev(dev);
-+	struct emac_instance *dev_ins = netdev_priv(ndev);
-+
-+	long tmp = simple_strtol(buf, NULL, 10);
-+	if (emac_has_feature(dev_ins, EMAC_FTR_HAS_TAH)) tah_set_ssr(dev_ins->tah_dev, 3, tmp);	
-+	return count;
-+}
-+
-+static ssize_t show_tah_ssr4(struct device *dev, struct device_attribute *attr, char *buf) {
-+	struct net_device *ndev = to_net_dev(dev);
-+	struct emac_instance *dev_ins = netdev_priv(ndev);
-+
-+	if (emac_has_feature(dev_ins, EMAC_FTR_HAS_TAH)) 
-+		return sprintf(buf, "%d\n", TAH_SSR_2_SS(tah_get_ssr(dev_ins->tah_dev, 4)) << 1);
-+	return 0;
-+}
-+
-+static ssize_t store_tah_ssr4(struct device *dev, struct device_attribute *attr,
-+	const char *buf, size_t count) {
-+	struct net_device *ndev = to_net_dev(dev);
-+	struct emac_instance *dev_ins = netdev_priv(ndev);
-+
-+	long tmp = simple_strtol(buf, NULL, 10);
-+	if (emac_has_feature(dev_ins, EMAC_FTR_HAS_TAH)) tah_set_ssr(dev_ins->tah_dev, 4, tmp);	
-+	return count;
-+}
-+
-+static ssize_t show_tah_ssr5(struct device *dev, struct device_attribute *attr, char *buf) {
-+	struct net_device *ndev = to_net_dev(dev);
-+	struct emac_instance *dev_ins = netdev_priv(ndev);
-+
-+	if (emac_has_feature(dev_ins, EMAC_FTR_HAS_TAH))
-+		return sprintf(buf, "%d\n", TAH_SSR_2_SS(tah_get_ssr(dev_ins->tah_dev, 5)) << 1);
-+	return 0;
-+}
-+
-+static ssize_t store_tah_ssr5(struct device *dev, struct device_attribute *attr,
-+	const char *buf, size_t count) {
-+	struct net_device *ndev = to_net_dev(dev);
-+	struct emac_instance *dev_ins = netdev_priv(ndev);
-+
-+	long tmp = simple_strtol(buf, NULL, 10);
-+	if (emac_has_feature(dev_ins, EMAC_FTR_HAS_TAH)) tah_set_ssr(dev_ins->tah_dev, 5, tmp);	
-+	return count;
-+}
++static DEVICE_ATTR(tah_ssr0, S_IRUGO | S_IWUSR, show_tah_ssr, store_tah_ssr);
++static DEVICE_ATTR(tah_ssr1, S_IRUGO | S_IWUSR, show_tah_ssr, store_tah_ssr);
++static DEVICE_ATTR(tah_ssr2, S_IRUGO | S_IWUSR, show_tah_ssr, store_tah_ssr);
++static DEVICE_ATTR(tah_ssr3, S_IRUGO | S_IWUSR, show_tah_ssr, store_tah_ssr);
++static DEVICE_ATTR(tah_ssr4, S_IRUGO | S_IWUSR, show_tah_ssr, store_tah_ssr);
++static DEVICE_ATTR(tah_ssr5, S_IRUGO | S_IWUSR, show_tah_ssr, store_tah_ssr);
 +#endif
 +
 +#if defined(CONFIG_IBM_EMAC_INTR_COALESCE)
@@ -2690,15 +2735,6 @@
 +static DEVICE_ATTR(coalesce_param_rx_count, S_IRUGO | S_IWUSR, show_rx_count, store_rx_count);
 +static DEVICE_ATTR(coalesce_param_tx_time, S_IRUGO | S_IWUSR, show_tx_time, store_tx_time);
 +static DEVICE_ATTR(coalesce_param_rx_time, S_IRUGO | S_IWUSR, show_rx_time, store_rx_time);
-+#endif
-+
-+#if defined(CONFIG_IBM_EMAC_TAH)
-+static DEVICE_ATTR(tah_ssr0, S_IRUGO | S_IWUSR, show_tah_ssr0, store_tah_ssr0);
-+static DEVICE_ATTR(tah_ssr1, S_IRUGO | S_IWUSR, show_tah_ssr1, store_tah_ssr1);
-+static DEVICE_ATTR(tah_ssr2, S_IRUGO | S_IWUSR, show_tah_ssr2, store_tah_ssr2);
-+static DEVICE_ATTR(tah_ssr3, S_IRUGO | S_IWUSR, show_tah_ssr3, store_tah_ssr3);
-+static DEVICE_ATTR(tah_ssr4, S_IRUGO | S_IWUSR, show_tah_ssr4, store_tah_ssr4);
-+static DEVICE_ATTR(tah_ssr5, S_IRUGO | S_IWUSR, show_tah_ssr5, store_tah_ssr5);
 +#endif
 +
 +#if defined(CONFIG_APM821xx) && defined(CONFIG_IBM_EMAC_MASK_CEXT)
@@ -2761,7 +2797,7 @@
  	}
  }
  
-@@ -2330,9 +2396,7 @@
+@@ -2330,9 +2290,7 @@
  #define	EMAC_DEP_PREV_IDX	5
  #define	EMAC_DEP_COUNT		6
  
@@ -2772,7 +2808,7 @@
  	int i, there = 0;
  	struct device_node *np;
  
-@@ -2350,27 +2414,19 @@
+@@ -2350,27 +2308,19 @@
  				there++;
  				continue;
  			}
@@ -2809,7 +2845,7 @@
  	of_dev_put(dev->mal_dev);
  	of_dev_put(dev->zmii_dev);
  	of_dev_put(dev->rgmii_dev);
-@@ -2378,12 +2434,9 @@
+@@ -2378,12 +2328,9 @@
  	of_dev_put(dev->tah_dev);
  }
  
@@ -2824,7 +2860,7 @@
  	return 0;
  }
  
-@@ -2391,8 +2444,7 @@
+@@ -2391,8 +2338,7 @@
  	.notifier_call = emac_of_bus_notify
  };
  
@@ -2834,7 +2870,7 @@
  	struct emac_depentry deps[EMAC_DEP_COUNT];
  	int i, err;
  
-@@ -2401,22 +2453,16 @@
+@@ -2401,22 +2347,16 @@
  	deps[EMAC_DEP_MAL_IDX].phandle = dev->mal_ph;
  	deps[EMAC_DEP_ZMII_IDX].phandle = dev->zmii_ph;
  	deps[EMAC_DEP_RGMII_IDX].phandle = dev->rgmii_ph;
@@ -2862,7 +2898,7 @@
  	}
  	if (err == 0) {
  		dev->mal_dev = deps[EMAC_DEP_MAL_IDX].ofdev;
-@@ -2429,23 +2475,18 @@
+@@ -2429,23 +2369,18 @@
  	return err;
  }
  
@@ -2889,7 +2925,7 @@
  	struct emac_instance *dev = netdev_priv(ndev);
  	struct phy_device *phy = dev->phy_dev;
  
-@@ -2457,8 +2498,7 @@
+@@ -2457,8 +2392,7 @@
  	dev->phy.advertising = phy->advertising;
  }
  
@@ -2899,7 +2935,7 @@
  	int ret = emac_mdio_read(bus->priv, addr, regnum);
  	/* This is a workaround for powered down ports/phys.
  	 * In the wild, this was seen on the Cisco Meraki MX60(W).
-@@ -2469,23 +2509,18 @@
+@@ -2469,23 +2403,18 @@
  	return ret < 0 ? 0xffff : ret;
  }
  
@@ -2926,7 +2962,7 @@
  	phy_dev->autoneg = phy->autoneg;
  	phy_dev->speed = phy->speed;
  	phy_dev->duplex = phy->duplex;
-@@ -2503,8 +2538,7 @@
+@@ -2503,8 +2432,7 @@
  	return emac_mdio_phy_start_aneg(phy, dev->phy_dev);
  }
  
@@ -2936,7 +2972,7 @@
  	struct net_device *ndev = phy->dev;
  	struct emac_instance *dev = netdev_priv(ndev);
  
-@@ -2514,13 +2548,10 @@
+@@ -2514,13 +2442,10 @@
  	return emac_mdio_phy_start_aneg(phy, dev->phy_dev);
  }
  
@@ -2952,7 +2988,7 @@
  	if (res) {
  		dev_err(&dev->ofdev->dev, "link update failed (%d).", res);
  		return ethtool_op_get_link(ndev);
-@@ -2529,16 +2560,12 @@
+@@ -2529,16 +2454,12 @@
  	return dev->phy_dev->link;
  }
  
@@ -2972,7 +3008,7 @@
  
  	phy->speed = phy_dev->speed;
  	phy->duplex = phy_dev->duplex;
-@@ -2547,8 +2574,7 @@
+@@ -2547,8 +2468,7 @@
  	return 0;
  }
  
@@ -2982,7 +3018,7 @@
  	struct net_device *ndev = phy->dev;
  	struct emac_instance *dev = netdev_priv(ndev);
  
-@@ -2564,8 +2590,7 @@
+@@ -2564,8 +2484,7 @@
  	.read_link	= emac_mdio_read_link,
  };
  
@@ -2992,7 +3028,7 @@
  	struct device_node *mii_np;
  	int res;
  
-@@ -2594,26 +2619,18 @@
+@@ -2594,26 +2513,18 @@
  	dev->mii_bus->reset = &emac_mii_bus_reset;
  	snprintf(dev->mii_bus->id, MII_BUS_ID_SIZE, "%s", dev->ofdev->name);
  	res = of_mdiobus_register(dev->mii_bus, mii_np);
@@ -3024,7 +3060,7 @@
  	if (!dev->phy_dev) {
  		dev_err(&dev->ofdev->dev, "failed to connect to PHY.\n");
  		return -ENODEV;
-@@ -2629,20 +2646,16 @@
+@@ -2629,20 +2540,16 @@
  	return 0;
  }
  
@@ -3049,7 +3085,7 @@
  		}
  	}
  
-@@ -2650,8 +2663,7 @@
+@@ -2650,8 +2557,7 @@
  	return res;
  }
  
@@ -3059,7 +3095,7 @@
  	struct device_node *np = dev->ofdev->dev.of_node;
  	struct net_device *ndev = dev->ndev;
  	u32 phy_map, adv;
-@@ -2661,24 +2673,19 @@
+@@ -2661,24 +2567,20 @@
  	dev->phy.mode = dev->phy_mode;
  
  	/* PHY-less configuration. */
@@ -3067,6 +3103,7 @@
 -	    of_phy_is_fixed_link(np)) {
 +	if ((dev->phy_address == 0xffffffff && dev->phy_map == 0xffffffff) || of_phy_is_fixed_link(np)) {
  		emac_reset(dev);
++        printk(KERN_INFO "eth0: Phy-less config\n");
  
 -		/* PHY-less configuration. */
 +		/* PHY-less configuration. Probably should move these settings to the dev tree */
@@ -3089,7 +3126,7 @@
  
  			res = of_phy_register_fixed_link(np);
  			dev->phy_dev = of_phy_find_device(np);
-@@ -2717,46 +2724,26 @@
+@@ -2717,46 +2619,26 @@
  	 * This is needed mostly for 440GX
  	 */
  	if (emac_phy_gpcs(dev->phy.mode)) {
@@ -3124,12 +3161,12 @@
 -			break;
 -
 -		case 0:
--			mutex_unlock(&emac_phy_map_lock);
++		if (res != 1) {
+ 			mutex_unlock(&emac_phy_map_lock);
 -			goto init_phy;
 -
 -		default:
-+		if (res != 1) {
- 			mutex_unlock(&emac_phy_map_lock);
+-			mutex_unlock(&emac_phy_map_lock);
 -			dev_err(&dev->ofdev->dev, "failed to attach dt phy (%d).\n",
 -				res);
 +			if (res == 0) goto init_phy;	
@@ -3144,7 +3181,7 @@
  
  	for (i = 0; i < 0x20; phy_map >>= 1, ++i)
  		if (!(phy_map & 1)) {
-@@ -2765,10 +2752,8 @@
+@@ -2765,10 +2647,8 @@
  
  			/* Quick check if there is a PHY at the address */
  			r = emac_mdio_read(dev->ndev, i, MII_BMCR);
@@ -3157,7 +3194,7 @@
  		}
  
  	/* Enable external clock source */
-@@ -2806,15 +2791,12 @@
+@@ -2806,15 +2686,12 @@
  		if (f & SUPPORTED_1000baseT_Full) {
  			speed = SPEED_1000;
  			fd = DUPLEX_FULL;
@@ -3176,7 +3213,7 @@
  
  		/* Force link parameters */
  		dev->phy.def->ops->setup_forced(&dev->phy, speed, fd);
-@@ -2822,83 +2804,60 @@
+@@ -2822,83 +2699,60 @@
  	return 0;
  }
  
@@ -3294,7 +3331,7 @@
  			dev->features |= EMAC_FTR_440EP_PHY_CLK_FIX;
  		if (of_device_is_compatible(np, "ibm,emac-405ez")) {
  #ifdef CONFIG_IBM_EMAC_NO_FLOW_CTRL
-@@ -2909,7 +2868,6 @@
+@@ -2909,7 +2763,6 @@
  			return -ENXIO;
  #endif
  		}
@@ -3302,7 +3339,7 @@
  	}
  
  	/* Fixup some feature bits based on the device tree */
-@@ -2920,8 +2878,7 @@
+@@ -2920,8 +2773,7 @@
  
  	/* CAB lacks the appropriate properties */
  	if (of_device_is_compatible(np, "ibm,emac-axon"))
@@ -3312,7 +3349,7 @@
  
  	/* Enable TAH/ZMII/RGMII features as found */
  	if (dev->tah_ph != 0) {
-@@ -2954,8 +2911,7 @@
+@@ -2954,8 +2806,7 @@
  	/* Read MAC-address */
  	p = of_get_property(np, "local-mac-address", NULL);
  	if (p == NULL) {
@@ -3322,7 +3359,7 @@
  		return -ENXIO;
  	}
  	memcpy(dev->ndev->dev_addr, p, ETH_ALEN);
-@@ -2968,6 +2924,9 @@
+@@ -2968,6 +2819,9 @@
  		dev->xaht_slots_shift = EMAC4_XAHT_SLOTS_SHIFT;
  		dev->xaht_width_shift = EMAC4_XAHT_WIDTH_SHIFT;
  	}
@@ -3332,7 +3369,7 @@
  
  	DBG(dev, "features     : 0x%08x / 0x%08x\n", dev->features, EMAC_FTRS_POSSIBLE);
  	DBG(dev, "tx_fifo_size : %d (%d gige)\n", dev->tx_fifo_size, dev->tx_fifo_size_gige);
-@@ -2978,6 +2937,9 @@
+@@ -2978,6 +2832,9 @@
  	return 0;
  }
  
@@ -3342,7 +3379,7 @@
  static const struct net_device_ops emac_netdev_ops = {
  	.ndo_open		= emac_open,
  	.ndo_stop		= emac_close,
-@@ -2988,6 +2950,9 @@
+@@ -2988,6 +2845,9 @@
  	.ndo_validate_addr	= eth_validate_addr,
  	.ndo_set_mac_address	= emac_set_mac_address,
  	.ndo_start_xmit		= emac_start_xmit,
@@ -3352,7 +3389,7 @@
  };
  
  static const struct net_device_ops emac_gige_netdev_ops = {
-@@ -3001,40 +2966,53 @@
+@@ -3001,40 +2861,57 @@
  	.ndo_set_mac_address	= emac_set_mac_address,
  	.ndo_start_xmit		= emac_start_xmit_sg,
  	.ndo_change_mtu		= emac_change_mtu,
@@ -3360,12 +3397,16 @@
 +	.ndo_poll_controller	= emac_netpoll,
 +#endif
  };
-+struct net_device *alloc_netdev_mqs_ocm(void *addr, int sizeof_priv, const char *name,
-+				    unsigned char name_assign_type, void (*setup)(struct net_device *),
-+				    unsigned int txqs, unsigned int rxqs);
  
 -static int emac_probe(struct platform_device *ofdev)
 -{
++//#define EMAC_ALLOC_ON_OCM
++#ifdef EMAC_ALLOC_ON_OCM
++struct net_device *alloc_netdev_mqs_ocm(void *addr, int sizeof_priv, const char *name,
++				    unsigned char name_assign_type, void (*setup)(struct net_device *),
++				    unsigned int txqs, unsigned int rxqs);
++#endif
++
 +static int emac_probe(struct platform_device *ofdev) {
  	struct net_device *ndev;
  	struct emac_instance *dev;
@@ -3391,11 +3432,10 @@
  
 -	/* Allocate our net_device structure */
 -	err = -ENOMEM;
-+#undef EMAC_ALLOC_ON_OCM
 +#ifdef EMAC_ALLOC_ON_OCM
 +	{
 +		phys_addr_t	phys;
-+		in alloc_size = ALIGN(sizeof(struct net_device), NETDEV_ALIGN) + sizeof(struct emac_instance) + NETDEV_ALIGN;
++		int alloc_size = ALIGN(sizeof(struct net_device), NETDEV_ALIGN) + sizeof(struct emac_instance) + NETDEV_ALIGN;
 +		printk(KERN_INFO "eth0: Allocating EMAC and NETDEV instance on OCM\n");
 +		ndev = ppc4xx_ocm_alloc(&phys, alloc_size, 4, PPC4XX_OCM_NON_CACHED, "emac_instance");
 +		memset(ndev, 0, alloc_size);
@@ -3416,11 +3456,12 @@
  	dev->blist = blist;
  	SET_NETDEV_DEV(ndev, &ofdev->dev);
 -
++    dev->ofdev_dev =  &ofdev->dev; // Cache dev
 +	
  	/* Initialize some embedded data structures */
  	mutex_init(&dev->mdio_lock);
  	mutex_init(&dev->link_lock);
-@@ -3043,8 +3021,7 @@
+@@ -3043,8 +2920,7 @@
  
  	/* Init various config data based on device-tree */
  	err = emac_init_config(dev);
@@ -3430,7 +3471,7 @@
  
  	/* Get interrupts. EMAC irq is mandatory, WOL irq is optional */
  	dev->emac_irq = irq_of_parse_and_map(np, 0);
-@@ -3057,8 +3034,12 @@
+@@ -3057,8 +2933,12 @@
  	ndev->irq = dev->emac_irq;
  
  	/* Map EMAC regs */
@@ -3445,7 +3486,7 @@
  	if (dev->emacp == NULL) {
  		printk(KERN_ERR "%pOF: Can't map device registers!\n", np);
  		err = -ENOMEM;
-@@ -3068,14 +3049,12 @@
+@@ -3068,14 +2948,12 @@
  	/* Wait for dependent devices */
  	err = emac_wait_deps(dev);
  	if (err) {
@@ -3462,7 +3503,7 @@
  
  	/* Register with MAL */
  	dev->commac.ops = &emac_commac_ops;
-@@ -3084,18 +3063,15 @@
+@@ -3084,18 +2962,15 @@
  	dev->commac.rx_chan_mask = MAL_CHAN_MASK(dev->mal_rx_chan);
  	err = mal_register_commac(dev->mal, &dev->commac);
  	if (err) {
@@ -3484,7 +3525,7 @@
  
  	DBG(dev, "tx_desc %p" NL, dev->tx_desc);
  	DBG(dev, "rx_desc %p" NL, dev->rx_desc);
-@@ -3105,7 +3081,9 @@
+@@ -3105,7 +2980,9 @@
  	memset(dev->rx_desc, 0, NUM_RX_BUFF * sizeof(struct mal_descriptor));
  	memset(dev->tx_skb, 0, NUM_TX_BUFF * sizeof(struct sk_buff *));
  	memset(dev->rx_skb, 0, NUM_RX_BUFF * sizeof(struct sk_buff *));
@@ -3495,7 +3536,7 @@
  	/* Attach to ZMII, if needed */
  	if (emac_has_feature(dev, EMAC_FTR_HAS_ZMII) &&
  	    (err = zmii_attach(dev->zmii_dev, dev->zmii_port, &dev->phy_mode)) != 0)
-@@ -3130,27 +3108,29 @@
+@@ -3130,76 +3007,82 @@
  	INIT_DELAYED_WORK(&dev->link_work, emac_link_timer);
  
  	/* Some SoCs like APM821xx does not support Half Duplex mode. */
@@ -3525,7 +3566,9 @@
 +#endif
  		ndev->features |= ndev->hw_features | NETIF_F_RXCSUM;
  	}
- 	ndev->watchdog_timeo = 5 * HZ;
+-	ndev->watchdog_timeo = 5 * HZ;
++	//ndev->watchdog_timeo = 5 * HZ;
++	ndev->watchdog_timeo = 100 * HZ;
  	if (emac_phy_supports_gige(dev->phy_mode)) {
  		ndev->netdev_ops = &emac_gige_netdev_ops;
  		dev->commac.ops = &emac_commac_sg_ops;
@@ -3534,8 +3577,13 @@
 +	} else ndev->netdev_ops = &emac_netdev_ops;
  	ndev->ethtool_ops = &emac_ethtool_ops;
  
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,19,0)
  	/* MTU range: 46 - 1500 or whatever is in OF */
-@@ -3161,45 +3141,42 @@
+ 	ndev->min_mtu = EMAC_MIN_MTU;
+ 	ndev->max_mtu = dev->max_mtu;
++#endif
+ 
+ 	netif_carrier_off(ndev);
  
  	err = register_netdev(ndev);
  	if (err) {
@@ -3566,12 +3614,16 @@
  	if (dev->phy.address >= 0)
 -		printk("%s: found %s PHY (0x%02x)\n", ndev->name,
 -		       dev->phy.def->name, dev->phy.address);
-+		printk("%s: found %s PHY (0x%02x)\n", ndev->name, dev->phy.def->name, dev->phy.address);
- 
+-
 -	/* Life is good */
 -	return 0;
--
++		printk("%s: found %s PHY (0x%02x)\n", ndev->name, dev->phy.def->name, dev->phy.address);
+ 
 -	/* I have a bad feeling about this ... */
++	/* performance optimization: cache time crtical register addresses */
++	//dev->mr0 = &dev->emacp->mr0; //ECO
++	dev->tmr0 = &dev->emacp->tmr0;
++
 +#if defined(CONFIG_IBM_EMAC_SYSFS)
 +	/* Register sys fs hooks */
 +	err = sysfs_create_group(&dev->ndev->dev.kobj, &ibm_emac_attr_group);
@@ -3598,7 +3650,7 @@
   err_unreg_commac:
  	mal_unregister_commac(dev->mal, &dev->commac);
   err_rel_deps:
-@@ -3207,17 +3184,13 @@
+@@ -3207,17 +3090,13 @@
   err_reg_unmap:
  	iounmap(dev->emacp);
   err_irq_unmap:
@@ -3619,7 +3671,7 @@
  	if (blist) {
  		*blist = NULL;
  		wake_up_all(&emac_probe_wait);
-@@ -3225,29 +3198,22 @@
+@@ -3225,29 +3104,22 @@
  	return err;
  }
  
@@ -3658,7 +3710,7 @@
  	busy_phy_map &= ~(1 << dev->phy.address);
  	DBG(dev, "busy_phy_map now %#x" NL, busy_phy_map);
  
-@@ -3256,31 +3222,21 @@
+@@ -3256,31 +3128,21 @@
  
  	iounmap(dev->emacp);
  
@@ -3699,7 +3751,7 @@
  	{},
  };
  MODULE_DEVICE_TABLE(of, emac_match);
-@@ -3294,8 +3250,7 @@
+@@ -3294,8 +3156,7 @@
  	.remove = emac_remove,
  };
  
@@ -3709,7 +3761,7 @@
  	struct device_node *np = NULL;
  	int j, max, i = 0;
  	int cell_indices[EMAC_BOOT_LIST_SIZE];
-@@ -3304,13 +3259,10 @@
+@@ -3304,13 +3165,10 @@
  	while((np = of_find_all_nodes(np)) != NULL) {
  		const u32 *idx;
  
@@ -3726,7 +3778,7 @@
  		cell_indices[i] = *idx;
  		emac_boot_list[i++] = of_node_get(np);
  		if (i >= EMAC_BOOT_LIST_SIZE) {
-@@ -3330,32 +3282,23 @@
+@@ -3330,32 +3188,23 @@
  		}
  }
  
@@ -3766,7 +3818,7 @@
  	return 0;
  
   err_tah:
-@@ -3370,21 +3313,19 @@
+@@ -3370,21 +3219,19 @@
  	return rc;
  }
  
@@ -3791,8 +3843,8 @@
  module_init(emac_init);
  module_exit(emac_exit);
 +
---- a/drivers/net/ethernet/ibm/emac/core.h	2019-02-20 10:25:50.000000000 +0100
-+++ b/drivers/net/ethernet/ibm/emac/core.h	2019-03-11 18:02:01.846779769 +0100
+--- a/drivers/net/ethernet/ibm/emac/core.h	2019-04-03 06:26:31.000000000 +0200
++++ b/drivers/net/ethernet/ibm/emac/core.h	2019-04-02 11:28:08.915058000 +0200
 @@ -22,8 +22,8 @@
   * option) any later version.
   *
@@ -3804,7 +3856,26 @@
  
  #include <linux/module.h>
  #include <linux/list.h>
-@@ -45,14 +45,41 @@
+@@ -33,6 +33,18 @@
+ #include <linux/dma-mapping.h>
+ #include <linux/spinlock.h>
+ #include <linux/of_platform.h>
++#include <linux/ctype.h>
++#include <linux/etherdevice.h>
++#include <linux/version.h>
++#include <linux/skbuff.h>
++#include <linux/tcp.h>
++
++#include <linux/delay.h>
++#include <linux/of.h>
++#include <linux/of_address.h>
++#include <linux/of_irq.h>
++#include <linux/of_net.h>
++#include <linux/of_mdio.h>
+ #include <linux/slab.h>
+ 
+ #include <asm/io.h>
+@@ -45,45 +57,72 @@
  #include "mal.h"
  #include "tah.h"
  #include "debug.h"
@@ -3849,9 +3920,17 @@
  
  #define EMAC_MIN_MTU			46
  
-@@ -60,29 +87,23 @@
+ /* Maximum L2 header length (VLAN tagged, no FCS) */
  #define EMAC_MTU_OVERHEAD		(6 * 2 + 2 + 4)
  
++/* minimum number of free TX descriptors required to wake up TX process */
++#define EMAC_TX_WAKEUP_THRESH		(NUM_TX_BUFF / 4)
++
++/* If packet size is less than this number, we allocate small skb and copy packet
++ * contents into it instead of just sending original big skb up
++ */
++#define EMAC_RX_COPY_THRESH		CONFIG_IBM_EMAC_RX_COPY_THRESHOLD
++
  /* RX BD size for the given MTU */
 -static inline int emac_rx_size(int mtu)
 -{
@@ -3864,28 +3943,31 @@
 +	else return mal_rx_size(ETH_DATA_LEN + EMAC_MTU_OVERHEAD);
  }
  
- #define EMAC_DMA_ALIGN(x)		ALIGN((x), dma_get_cache_alignment())
- 
+-#define EMAC_DMA_ALIGN(x)		ALIGN((x), dma_get_cache_alignment())
+-
 -#define EMAC_RX_SKB_HEADROOM		\
 -	EMAC_DMA_ALIGN(CONFIG_IBM_EMAC_RX_SKB_HEADROOM)
-+#define EMAC_RX_SKB_HEADROOM	EMAC_DMA_ALIGN(CONFIG_IBM_EMAC_RX_SKB_HEADROOM)
++//#define EMAC_RX_SKB_HEADROOM	EMAC_DMA_ALIGN(CONFIG_IBM_EMAC_RX_SKB_HEADROOM)
  
  /* Size of RX skb for the given MTU */
 -static inline int emac_rx_skb_size(int mtu)
 -{
 +static inline int emac_rx_skb_size(int mtu) {
  	int size = max(mtu + EMAC_MTU_OVERHEAD, emac_rx_size(mtu));
- 	return EMAC_DMA_ALIGN(size + 2) + EMAC_RX_SKB_HEADROOM;
+-	return EMAC_DMA_ALIGN(size + 2) + EMAC_RX_SKB_HEADROOM;
++	return SKB_DATA_ALIGN(size + NET_IP_ALIGN);
  }
  
  /* RX DMA sync size */
 -static inline int emac_rx_sync_size(int mtu)
 -{
+-	return EMAC_DMA_ALIGN(emac_rx_size(mtu) + 2);
 +static inline int emac_rx_sync_size(int mtu) {
- 	return EMAC_DMA_ALIGN(emac_rx_size(mtu) + 2);
++	return SKB_DATA_ALIGN(emac_rx_size(mtu) + NET_IP_ALIGN);
  }
  
-@@ -162,12 +183,12 @@
+ /* Driver statistcs is split into two parts to make it more cache friendly:
+@@ -162,13 +201,14 @@
  };
  
  #define EMAC_ETHTOOL_STATS_COUNT	((sizeof(struct emac_stats) + \
@@ -3899,9 +3981,11 @@
 +	struct resource			rsrc_regs;
 +	struct emac_regs __iomem 	*emacp;
  	struct platform_device		*ofdev;
++    struct device	        *ofdev_dev;     // Cache ofdev->dev
  	struct device_node		**blist; /* bootlist entry */
  
-@@ -224,6 +245,11 @@
+ 	/* MAL linkage */
+@@ -224,6 +264,11 @@
  	/* OPB bus frequency in Mhz */
  	u32				opb_bus_freq;
  
@@ -3913,26 +3997,26 @@
  	/* Cell index within an ASIC (for clk mgmnt) */
  	u32				cell_index;
  
-@@ -245,8 +271,7 @@
+@@ -245,8 +290,10 @@
  	u32				xaht_slots_shift;
  	u32				xaht_width_shift;
  
 -	/* Descriptor management
 -	 */
++	u32 __iomem		*mr0;			/* Special ECO */
++	u32 __iomem		*tmr0;			/* Special ECO */
++
 +	/* Descriptor management */
  	struct mal_descriptor		*tx_desc;
  	int				tx_cnt;
  	int				tx_slot;
-@@ -259,118 +284,90 @@
- 	int				rx_sync_size;
+@@ -260,117 +307,87 @@
  
  	struct sk_buff			*tx_skb[NUM_TX_BUFF];
-+	//struct sk_buff			**tx_skb;
  	struct sk_buff			*rx_skb[NUM_RX_BUFF];
 -
 -	/* Stats
 -	 */
-+	//struct sk_buff			**rx_skb;
 +	
 +	/* Stats */
  	struct emac_error_stats		estats;
@@ -4083,12 +4167,16 @@
  }
  
  /*
-@@ -389,53 +386,38 @@
+@@ -389,53 +406,38 @@
  
  #define	EMAC4SYNC_XAHT_SLOTS_SHIFT	8
  #define	EMAC4SYNC_XAHT_WIDTH_SHIFT	5
 +/* The largest span between slots and widths above is 3 */
 +#define	EMAC_XAHT_MAX_REGS		    (1 << 3)
++
++#define	EMAC_XAHT_SLOTS(dev)        (1 << (dev)->xaht_slots_shift)
++#define	EMAC_XAHT_WIDTH(dev)        (1 << (dev)->xaht_width_shift)
++#define	EMAC_XAHT_REGS(dev)         (1 << ((dev)->xaht_slots_shift - (dev)->xaht_width_shift))
  
 -#define	EMAC_XAHT_SLOTS(dev)         	(1 << (dev)->xaht_slots_shift)
 -#define	EMAC_XAHT_WIDTH(dev)         	(1 << (dev)->xaht_width_shift)
@@ -4099,19 +4187,15 @@
 -	((EMAC_XAHT_SLOTS(dev) - 1) -			\
 -	 ((crc) >> ((sizeof (u32) * BITS_PER_BYTE) -	\
 -		    (dev)->xaht_slots_shift)))
-+#define	EMAC_XAHT_SLOTS(dev)        (1 << (dev)->xaht_slots_shift)
-+#define	EMAC_XAHT_WIDTH(dev)        (1 << (dev)->xaht_width_shift)
-+#define	EMAC_XAHT_REGS(dev)         (1 << ((dev)->xaht_slots_shift - (dev)->xaht_width_shift))
- 
--#define	EMAC_XAHT_SLOT_TO_REG(dev, slot)		\
--	((slot) >> (dev)->xaht_width_shift)
 +#define	EMAC_XAHT_CRC_TO_SLOT(dev, crc)		((EMAC_XAHT_SLOTS(dev) - 1) - \
 +	((crc) >> ((sizeof (u32) * BITS_PER_BYTE) -	(dev)->xaht_slots_shift)))
  
+-#define	EMAC_XAHT_SLOT_TO_REG(dev, slot)		\
+-	((slot) >> (dev)->xaht_width_shift)
++#define	EMAC_XAHT_SLOT_TO_REG(dev, slot)	((slot) >> (dev)->xaht_width_shift)
+ 
 -#define	EMAC_XAHT_SLOT_TO_MASK(dev, slot)		\
 -	((u32)(1 << (EMAC_XAHT_WIDTH(dev) - 1)) >>	\
-+#define	EMAC_XAHT_SLOT_TO_REG(dev, slot)	((slot) >> (dev)->xaht_width_shift)
-+
 +#define	EMAC_XAHT_SLOT_TO_MASK(dev, slot)	((u32)(1 << (EMAC_XAHT_WIDTH(dev) - 1)) >>	\
  	 ((slot) & (u32)(EMAC_XAHT_WIDTH(dev) - 1)))
  
@@ -4156,14 +4240,14 @@
  	return emac_xaht_base(dev);
  }
  
-@@ -466,4 +448,4 @@
+@@ -466,4 +468,4 @@
  #define EMAC4_ETHTOOL_REGS_VER		4
  #define EMAC4SYNC_ETHTOOL_REGS_VER	5
  
 -#endif /* __IBM_NEWEMAC_CORE_H */
 +#endif /* __IBM_EMAC_CORE_H */
---- a/drivers/net/ethernet/ibm/emac/emac.h	2019-02-20 10:25:50.000000000 +0100
-+++ b/drivers/net/ethernet/ibm/emac/emac.h	2019-03-11 17:19:25.667250665 +0100
+--- a/drivers/net/ethernet/ibm/emac/emac.h	2019-04-03 06:26:31.000000000 +0200
++++ b/drivers/net/ethernet/ibm/emac/emac.h	2019-03-23 15:07:30.000000000 +0100
 @@ -140,7 +140,7 @@
  #define EMAC4_MR1_RFS_4K		0x00180000
  #define EMAC4_MR1_RFS_8K		0x00200000
@@ -4198,71 +4282,35 @@
  
  /* EMAC specific TX descriptor status fields (read access) */
  #define EMAC_TX_ST_BFCS			0x0200
---- a/drivers/net/ethernet/ibm/emac/Kconfig	2019-02-20 10:25:50.000000000 +0100
-+++ b/drivers/net/ethernet/ibm/emac/Kconfig	2019-03-11 17:19:25.671250842 +0100
-@@ -40,6 +40,51 @@
+@@ -277,11 +284,13 @@
+ #define EMAC_TX_ST_SC			0x0004
+ #define EMAC_TX_ST_UR			0x0002
+ #define EMAC_TX_ST_SQE			0x0001
+-#define EMAC_IS_BAD_TX			(EMAC_TX_ST_LCS | EMAC_TX_ST_ED | \
+-					 EMAC_TX_ST_EC | EMAC_TX_ST_LC | \
+-					 EMAC_TX_ST_MC | EMAC_TX_ST_UR)
+-#define EMAC_IS_BAD_TX_TAH		(EMAC_TX_ST_LCS | EMAC_TX_ST_ED | \
+-					 EMAC_TX_ST_EC | EMAC_TX_ST_LC)
++#ifdef CONFIG_IBM_EMAC_TAH
++#define EMAC_IS_BAD_TX			(EMAC_TX_ST_LCS | EMAC_TX_ST_ED | EMAC_TX_ST_EC | EMAC_TX_ST_LC)
++#else
++#define EMAC_IS_BAD_TX			(EMAC_TX_ST_LCS | EMAC_TX_ST_ED | EMAC_TX_ST_EC | \
++					             EMAC_TX_ST_LC | EMAC_TX_ST_MC | EMAC_TX_ST_UR)
++#endif
++//#define EMAC_IS_BAD_TX_TAH		(EMAC_TX_ST_LCS | EMAC_TX_ST_ED | EMAC_TX_ST_EC | EMAC_TX_ST_LC)
  
- 	  If unsure, set to 0.
- 
-+config IBM_EMAC_INTR_COALESCE
-+	bool "Hardware Interrupt coalescing"
-+	depends on IBM_EMAC && (460EX || 460GT || 405EX || 460SX || APM821xx)
-+	default n
-+	help
-+	  When selected the Ethernet interrupt coalescing is selected.
-+
-+config IBM_EMAC_TX_COAL_COUNT
-+	int "TX Coalescence frame count (packets)"
-+	depends on IBM_EMAC_INTR_COALESCE
-+	default "16"
-+
-+config IBM_EMAC_TX_COAL_TIMER
-+	int "TX Coalescence timer (clock ticks)"
-+	depends on IBM_EMAC_INTR_COALESCE
-+	default "1000000"
-+
-+config IBM_EMAC_RX_COAL_COUNT
-+	int "RX Coalescence frame count (packets)"
-+	depends on IBM_EMAC_INTR_COALESCE
-+	default "1"
-+
-+config IBM_EMAC_RX_COAL_TIMER
-+	int "RX Coalescence timer (clock ticks)"
-+	depends on IBM_EMAC_INTR_COALESCE
-+	default "1000000"
-+	  
-+config IBM_EMAC_MASK_CEXT
-+	bool "Mask Carrier Extension signals"
-+	depends on IBM_EMAC && APM821xx
-+	default n
-+	help
-+	  During normal idle TX, continously send dummy packets to mask 
-+	  the Carrier Extension signals. This creates a separate BD 
-+	  specifically for this purpose.
-+
-+	  If unsure, set to N.
-+
-+config IBM_EMAC_SYSFS
-+	bool "Sysfs support for IBM EMAC"
-+	depends on IBM_EMAC
-+	default n
-+	help
-+	  Export IBM EMAC parameters via /sys/class/net/eth* interface
-+
- config IBM_EMAC_DEBUG
- 	bool "Debugging"
- 	depends on IBM_EMAC
---- a/drivers/net/ethernet/ibm/emac/mal.c	2019-02-20 10:25:50.000000000 +0100
-+++ b/drivers/net/ethernet/ibm/emac/mal.c	2019-03-11 18:02:28.656066085 +0100
-@@ -25,319 +25,380 @@
+ /* EMAC specific RX descriptor status fields (read access) */
+ #define EMAC_RX_ST_OE			0x0200
+--- a/drivers/net/ethernet/ibm/emac/mal.c	2019-04-03 06:26:31.000000000 +0200
++++ b/drivers/net/ethernet/ibm/emac/mal.c	2019-04-01 18:24:01.412575000 +0200
+@@ -25,364 +25,444 @@
   *
   */
  
-+#include <linux/version.h>
- #include <linux/delay.h>
- #include <linux/slab.h>
- #include <linux/of_irq.h>
- 
+-#include <linux/delay.h>
+-#include <linux/slab.h>
+-#include <linux/of_irq.h>
+-
  #include "core.h"
 +#include "mal.h"
  #include <asm/dcr-regs.h>
@@ -4298,13 +4346,19 @@
  
 -	if (list_empty(&mal->list))
 -		napi_enable(&mal->napi);
-+	if (list_empty(&mal->list))	napi_enable(&mal->napi);
  	mal->tx_chan_mask |= commac->tx_chan_mask;
  	mal->rx_chan_mask |= commac->rx_chan_mask;
- 	list_add(&commac->list, &mal->list);
--
- 	spin_unlock_irqrestore(&mal->lock, flags);
+-	list_add(&commac->list, &mal->list);
  
++#if defined (CONFIG_APM821xx) // APM821xx has just a single EMAC/MAL RX/TX channel
++	napi_enable(&mal->napi);
++    mal->commac = commac;
++#else
++	if (list_empty(&mal->list)) napi_enable(&mal->napi);
++	list_add(&commac->list, &mal->list);
++#endif
+ 	spin_unlock_irqrestore(&mal->lock, flags);
+-
  	return 0;
  }
  
@@ -4322,11 +4376,17 @@
  
  	mal->tx_chan_mask &= ~commac->tx_chan_mask;
  	mal->rx_chan_mask &= ~commac->rx_chan_mask;
- 	list_del_init(&commac->list);
+-	list_del_init(&commac->list);
 -	if (list_empty(&mal->list))
 -		napi_disable(&mal->napi);
--
+ 
++#if defined(CONFIG_APM821xx) // APM821xx has just a single EMAC/MAL RX/TX channel
++    mal->commac = NULL;
++    napi_disable(&mal->napi);
++#else
++	list_del_init(&commac->list);
 +	if (list_empty(&mal->list))	napi_disable(&mal->napi);
++#endif
  	spin_unlock_irqrestore(&mal->lock, flags);
  }
  
@@ -4444,13 +4504,17 @@
  	spin_lock_irqsave(&mal->lock, flags);
 -
  	MAL_DBG(mal, "poll_add(%p)" NL, commac);
--
++	set_bit(MAL_COMMAC_POLL_DISABLED, &commac->flags);	/* starts disabled */
+ 
 -	/* starts disabled */
 -	set_bit(MAL_COMMAC_POLL_DISABLED, &commac->flags);
 -
-+	set_bit(MAL_COMMAC_POLL_DISABLED, &commac->flags);	/* starts disabled */
++#if defined (CONFIG_APM821xx) // APM821xx has just a single EMAC/MAL RX/TX channel
++    mal->poll_commac = commac;
++#else
  	list_add_tail(&commac->poll_list, &mal->poll_list);
 -
++#endif
  	spin_unlock_irqrestore(&mal->lock, flags);
  }
  
@@ -4462,38 +4526,49 @@
  	spin_lock_irqsave(&mal->lock, flags);
 -
  	MAL_DBG(mal, "poll_del(%p)" NL, commac);
--
+ 
++#if defined (CONFIG_APM821xx) // APM821xx has just a single EMAC/MAL RX/TX channel
++    mal->poll_commac = NULL;
++#else
  	list_del(&commac->poll_list);
 -
++#endif
  	spin_unlock_irqrestore(&mal->lock, flags);
  }
  
  /* synchronized by mal_poll() */
 -static inline void mal_enable_eob_irq(struct mal_instance *mal)
 -{
-+static inline void mal_enable_eob_irq(struct mal_instance *mal) {
++static __always_inline void mal_enable_eob_irq(struct mal_instance *mal) {
  	MAL_DBG2(mal, "enable_irq" NL);
 -
- 	// XXX might want to cache MAL_CFG as the DCR read can be slooooow
- 	set_mal_dcrn(mal, MAL_CFG, get_mal_dcrn(mal, MAL_CFG) | MAL_CFG_EOPIE);
+-	// XXX might want to cache MAL_CFG as the DCR read can be slooooow
+-	set_mal_dcrn(mal, MAL_CFG, get_mal_dcrn(mal, MAL_CFG) | MAL_CFG_EOPIE);
++	// Cache MAL_CFG as the DCR read can be slooooow
++	//set_mal_dcrn(mal, MAL_CFG, get_mal_dcrn(mal, MAL_CFG) | MAL_CFG_EOPIE);
++	set_mal_dcrn(mal, MAL_CFG, mal->mal_cfg | MAL_CFG_EOPIE);  
  }
  
  /* synchronized by NAPI state */
 -static inline void mal_disable_eob_irq(struct mal_instance *mal)
 -{
-+static inline void mal_disable_eob_irq(struct mal_instance *mal) {
- 	// XXX might want to cache MAL_CFG as the DCR read can be slooooow
- 	set_mal_dcrn(mal, MAL_CFG, get_mal_dcrn(mal, MAL_CFG) & ~MAL_CFG_EOPIE);
+-	// XXX might want to cache MAL_CFG as the DCR read can be slooooow
+-	set_mal_dcrn(mal, MAL_CFG, get_mal_dcrn(mal, MAL_CFG) & ~MAL_CFG_EOPIE);
 -
++static __always_inline void mal_disable_eob_irq(struct mal_instance *mal) {
++	// Cache MAL_CFG as the DCR read can be slooooow
++	//set_mal_dcrn(mal, MAL_CFG, get_mal_dcrn(mal, MAL_CFG) & ~MAL_CFG_EOPIE);
++	set_mal_dcrn(mal, MAL_CFG, mal->mal_cfg & ~MAL_CFG_EOPIE);  
  	MAL_DBG2(mal, "disable_irq" NL);
  }
  
 -static irqreturn_t mal_serr(int irq, void *dev_instance)
 -{
+-	struct mal_instance *mal = dev_instance;
 +#ifdef CONFIG_IBM_EMAC_INTR_COALESCE
 +#if defined(CONFIG_460SX)
 +/* Set Tx fram count */
-+static inline void set_ic_txfthr(struct mal_instance *mal) {
++static void set_ic_txfthr(struct mal_instance *mal) {
 +	int val = (mal->coales_param[0].tx_count) << SDR0_ICC_FTHR_SHIFT;
 +	int reg = val | (1<<SDR0_ICC_FLUSH);  // Flush bit 1 enables counter
 +
@@ -4508,7 +4583,7 @@
 +	mal->enet_coales_iccrtx = reg;
 +}
 +/* Set Rx fram count */
-+static inline void set_ic_rxfthr(struct mal_instance *mal) {
++static void set_ic_rxfthr(struct mal_instance *mal) {
 +	int val = (mal->coales_param[0].rx_count) << SDR0_ICC_FTHR_SHIFT;
 +	int reg = val | (1<<SDR0_ICC_FLUSH);  // Flush bit 1 enables counter
 +
@@ -4523,7 +4598,8 @@
 +	mal->enet_coales_iccrrx = reg;
 +}
 +#endif
-+
+ 
+-	u32 esr = get_mal_dcrn(mal, MAL_ESR);
 +#define TX_COAL_CNT (CONFIG_IBM_EMAC_TX_COAL_COUNT & COAL_FRAME_MASK)
 +#define RX_COAL_CNT (CONFIG_IBM_EMAC_RX_COAL_COUNT & COAL_FRAME_MASK)
 +
@@ -4550,14 +4626,14 @@
 +
 +	/* Set Tx/Rx Timer values, with SYSFS the user can change those */
 +#if defined(CONFIG_IBM_EMAC_SYSFS)
-+	mtdcri(SDR0, DCRN_SDR0_ICCTRTX0,  mal->coales_param[0].tx_time);
-+	mtdcri(SDR0, DCRN_SDR0_ICCTRRX0,  mal->coales_param[0].rx_time);
++	mtdcri(SDR0, DCRN_SDR0_ICCTRTX0, mal->coales_param[0].tx_time);
++	mtdcri(SDR0, DCRN_SDR0_ICCTRRX0, mal->coales_param[0].rx_time);
 +	/* Enable the Tx/Rx Coalescing interrupt */	
 +	mtdcri(SDR0, DCRN_SDR0_ICCRTX0, (mal->coales_param[0].tx_count & COAL_FRAME_MASK)<<SDR0_ICC_FTHR_SHIFT);
 +	mtdcri(SDR0, DCRN_SDR0_ICCRRX0, (mal->coales_param[0].rx_count & COAL_FRAME_MASK)<<SDR0_ICC_FTHR_SHIFT);
 +#else
-+	mtdcri(SDR0, DCRN_SDR0_ICCTRTX0,  CONFIG_IBM_EMAC_TX_COAL_TIMER);
-+	mtdcri(SDR0, DCRN_SDR0_ICCTRRX0,  CONFIG_IBM_EMAC_RX_COAL_TIMER);
++	mtdcri(SDR0, DCRN_SDR0_ICCTRTX0, CONFIG_IBM_EMAC_TX_COAL_TIMER);
++	mtdcri(SDR0, DCRN_SDR0_ICCTRRX0, CONFIG_IBM_EMAC_RX_COAL_TIMER);
 +
 +	/* Enable the Tx/Rx Coalescing interrupt */	
 +	mtdcri(SDR0, DCRN_SDR0_ICCRTX0, TX_COAL_CNT << SDR0_ICC_FTHR_SHIFT);
@@ -4574,7 +4650,9 @@
 +	mtdcri(SDR0, DCRN_SDR0_ICCRRX2, SDR0_ICC_FLUSH);
 +	mtdcri(SDR0, DCRN_SDR0_ICCRRX3, SDR0_ICC_FLUSH);
 +#endif
-+
+ 
+-	/* Clear the error status register */
+-	set_mal_dcrn(mal, MAL_ESR, esr);
 +	/* Set Tx/Rx Timer values */
 +	mtdcri(SDR0, DCRN_SDR0_ICCTRTX0, CONFIG_IBM_EMAC_TX_COAL_TIMER);
 +	mtdcri(SDR0, DCRN_SDR0_ICCTRTX1, CONFIG_IBM_EMAC_TX_COAL_TIMER);
@@ -4595,7 +4673,7 @@
 +	mtdcri(SDR0, DCRN_SDR0_ICCRTX2, TX_COAL_CNT << SDR0_ICC_FTHR_SHIFT);
 +	mtdcri(SDR0, DCRN_SDR0_ICCRTX3, TX_COAL_CNT << SDR0_ICC_FTHR_SHIFT);
 +#endif
-+
+ 
 +	mtdcri(SDR0, DCRN_SDR0_ICCRRX0, RX_COAL_CNT << SDR0_ICC_FTHR_SHIFT);
 +	mtdcri(SDR0, DCRN_SDR0_ICCRRX1, RX_COAL_CNT << SDR0_ICC_FTHR_SHIFT);
 +#if defined(CONFIG_460GT)
@@ -4624,14 +4702,9 @@
 +#endif
 +
 +static irqreturn_t mal_serr(int irq, void *dev_instance) {
- 	struct mal_instance *mal = dev_instance;
-+	//struct list_head *l;
- 
- 	u32 esr = get_mal_dcrn(mal, MAL_ESR);
- 
--	/* Clear the error status register */
--	set_mal_dcrn(mal, MAL_ESR, esr);
--
++	struct mal_instance *mal = dev_instance;
++	u32 esr = get_mal_dcrn(mal, MAL_ESR);
++
 +	set_mal_dcrn(mal, MAL_ESR, esr);		/* Clear the error status register */
  	MAL_DBG(mal, "SERR %08x" NL, esr);
  
@@ -4669,27 +4742,33 @@
 -			       mal->index, esr);
 +			printk(KERN_ERR "mal%d: system error, OPB (ESR = 0x%08x)\n", mal->index, esr);
  	}
-+
-+	// ECO
-+	//list_for_each(l, &mal->poll_list) {
-+	//	struct mal_commac *mc =	list_entry(l, struct mal_commac, poll_list);
-+	//	mc->ops->reset(mc->dev);
-+	//}
-+
  	return IRQ_HANDLED;
  }
  
 -static inline void mal_schedule_poll(struct mal_instance *mal)
 -{
-+static inline void mal_schedule_poll(struct mal_instance *mal) {
- 	if (likely(napi_schedule_prep(&mal->napi))) {
+-	if (likely(napi_schedule_prep(&mal->napi))) {
++__always_inline bool local_napi_schedule_prep(struct napi_struct *n) {
++	unsigned long val, new;
++	do {
++		val = READ_ONCE(n->state);
++		if (unlikely(val & NAPIF_STATE_DISABLE)) return false;
++		new = val | NAPIF_STATE_SCHED;
++		new |= (val & NAPIF_STATE_SCHED) / NAPIF_STATE_SCHED * NAPIF_STATE_MISSED;
++	} while (cmpxchg(&n->state, val, new) != val);
++	return !(val & NAPIF_STATE_SCHED);
++}
++
++static __always_inline void mal_schedule_poll(struct mal_instance *mal) {
++	if (likely(local_napi_schedule_prep(&mal->napi))) {
  		MAL_DBG2(mal, "schedule_poll" NL);
  		spin_lock(&mal->lock);
  		mal_disable_eob_irq(mal);
  		spin_unlock(&mal->lock);
- 		__napi_schedule(&mal->napi);
+-		__napi_schedule(&mal->napi);
 -	} else
 -		MAL_DBG2(mal, "already in poll" NL);
++		__napi_schedule_irqoff(&mal->napi); //__napi_schedule(&mal->napi);
 +	} else MAL_DBG2(mal, "already in poll" NL);
  }
  
@@ -4740,8 +4819,15 @@
 -static irqreturn_t mal_txde(int irq, void *dev_instance)
 -{
 +#ifdef CONFIG_IBM_EMAC_INTR_COALESCE
-+static irqreturn_t mal_coal(int irq, void *dev_instance) {
++static irqreturn_t mal_coal_tx(int irq, void *dev_instance) {
++	struct mal_instance *mal = dev_instance;
++    //mal->poll_tx = 1;
++	mal_schedule_poll(mal);
++	return IRQ_HANDLED;
++}
++static irqreturn_t mal_coal_rx(int irq, void *dev_instance) {
  	struct mal_instance *mal = dev_instance;
++    //mal->poll_rx = 1;
 +	mal_schedule_poll(mal);
 +	return IRQ_HANDLED;
 +}
@@ -4768,17 +4854,26 @@
 -{
 +static irqreturn_t mal_rxde(int irq, void *dev_instance) {
  	struct mal_instance *mal = dev_instance;
- 	struct list_head *l;
- 
+-	struct list_head *l;
+-
  	u32 deir = get_mal_dcrn(mal, MAL_RXDEIR);
+ 
+-	MAL_DBG(mal, "rxde %08x" NL, deir);
 -
- 	MAL_DBG(mal, "rxde %08x" NL, deir);
--
++#if defined (CONFIG_APM821xx) // APM821xx has just one single EMAC and one MAL channel
++    {   struct mal_commac *mc = mal->commac;
++#else
  	list_for_each(l, &mal->list) {
  		struct mal_commac *mc = list_entry(l, struct mal_commac, list);
- 		if (deir & mc->rx_chan_mask) {
-@@ -348,41 +409,31 @@
- 
+-		if (deir & mc->rx_chan_mask) {
++#endif
++		if (likely(deir & mc->rx_chan_mask)) {
+ 			set_bit(MAL_COMMAC_RX_STOPPED, &mc->flags);
+ 			mc->ops->rxde(mc->dev);
+ 		}
+ 	}
+-
++	MAL_DBG(mal, "rxde %08x" NL, deir);
  	mal_schedule_poll(mal);
  	set_mal_dcrn(mal, MAL_RXDEIR, deir);
 -
@@ -4804,7 +4899,7 @@
 +	if (esr & MAL_ESR_EVB) { // ESR contains at least one error
 +		if (esr & MAL_ESR_DE) {			/* descriptor error */
 +			if (esr & MAL_ESR_CIDT)	return mal_rxde(irq, dev_instance);
-+			else	return mal_txde(irq, dev_instance);
++			else return mal_txde(irq, dev_instance);
 +		} else return mal_serr(irq, dev_instance);	/* SERR */
  	}
  	return IRQ_HANDLED;
@@ -4828,57 +4923,392 @@
  	smp_wmb();
  	clear_bit(MAL_COMMAC_POLL_DISABLED, &commac->flags);
  
-@@ -394,56 +445,57 @@
+@@ -394,79 +474,412 @@
  	napi_schedule(&mal->napi);
  }
  
 -static int mal_poll(struct napi_struct *napi, int budget)
 -{
++#if defined (CONFIG_APM821xx) // Moved from core.c
++
++extern void emac_rx_enable(struct emac_instance *dev);
++
++static void parse_rx_error(struct emac_instance *dev, u16 ctrl) {
++	struct emac_error_stats *st = &dev->estats;
++
++	DBG(dev, "BD RX error %04x" NL, ctrl);
++
++	++st->rx_bd_errors;
++	if (ctrl & EMAC_RX_ST_OE)	++st->rx_bd_overrun;
++	if (ctrl & EMAC_RX_ST_BP)	++st->rx_bd_bad_packet;
++	if (ctrl & EMAC_RX_ST_RP)	++st->rx_bd_runt_packet;
++	if (ctrl & EMAC_RX_ST_SE)	++st->rx_bd_short_event;
++	if (ctrl & EMAC_RX_ST_AE)	++st->rx_bd_alignment_error;
++	if (ctrl & EMAC_RX_ST_BFCS)	++st->rx_bd_bad_fcs;
++	if (ctrl & EMAC_RX_ST_PTL)	++st->rx_bd_packet_too_long;
++	if (ctrl & EMAC_RX_ST_ORE)	++st->rx_bd_out_of_range;
++	if (ctrl & EMAC_RX_ST_IRE)	++st->rx_bd_in_range;
++}
++
++static __always_inline void recycle_rx_skb(struct emac_instance *dev, int slot, int len, unsigned char* skbdata) {
++	//struct sk_buff *skb = dev->rx_skb[slot];
++
++	DBG2(dev, "recycle %d %d" NL, slot, len);
++	if (likely(len))
++		dma_map_single(&dev->ofdev->dev, skbdata - NET_IP_ALIGN, SKB_DATA_ALIGN(len + NET_IP_ALIGN), DMA_FROM_DEVICE);
++	dev->rx_desc[slot].data_len = 0;
++	wmb();
++	dev->rx_desc[slot].ctrl = MAL_RX_CTRL_EMPTY| MAL_RX_CTRL_INTR| (slot == (NUM_RX_BUFF-1) ? MAL_RX_CTRL_WRAP : 0);
++}
++
++static __always_inline void rx_csum(struct emac_instance *dev, struct sk_buff *skb, u16 ctrl) {
++#ifdef CONFIG_IBM_EMAC_TAH
++	//if (!ctrl && dev->tah_dev) {
++	if (likely(!ctrl)) {
++		skb->ip_summed = CHECKSUM_UNNECESSARY;
++		++dev->stats.rx_packets_csum;
++	}
++#endif
++}
++
++/* ECO: local version of skb_put for performance reasons */
++#define skb_tail_pointer(skb) (skb)->tail
++#define skb_putl(skb, len) SKB_LINEAR_ASSERT(skb); skb->tail += len; skb->len  += len;
++
++// rx_sg_append was returning 0 and -1, used in ONLY in NOT comparisons --> invert return values 
++static __always_inline int rx_sg_append(struct emac_instance *dev, int slot, int len, 
++    unsigned char *data, struct sk_buff **skb_sg) {
++    struct sk_buff *skb_sgp = *skb_sg;
++	if (likely(skb_sgp != NULL)) {
++		//int len = dev->rx_desc[slot].data_len;
++		int tot_len = skb_sgp->len + len;
++
++		if (unlikely(tot_len + NET_IP_ALIGN > dev->rx_skb_size)) {
++			++dev->estats.rx_dropped_mtu;
++			dev_kfree_skb(skb_sgp);
++            skb_sg = NULL;
++		} else {  //ECO
++			//if(unlikely((dev->rx_sg_skb->tail + len) > dev->rx_sg_skb->end)) goto out;
++			memcpy(skb_tail_pointer(skb_sgp), data, len);	// dev->rx_skb[slot]->data
++			skb_putl(skb_sgp, len);
++			recycle_rx_skb(dev, slot, len, data);	//dev->rx_skb[slot]->data
++			return 1;
++		}
++	}
++	recycle_rx_skb(dev, slot, 0, dev->rx_skb[slot]->data);
++	return 0;
++}
++
++static __always_inline int __prepare_rx_skb(struct sk_buff *skb, struct emac_instance *dev, int slot,
++        struct mal_descriptor *rx_desc) {
++
++	dev->rx_skb[slot] = skb;
++    rx_desc->data_len = 0;
++    rx_desc->data_ptr =
++	    dma_map_single(&dev->ofdev->dev, skb->data - NET_IP_ALIGN, dev->rx_sync_size, DMA_FROM_DEVICE) + NET_IP_ALIGN;
++	wmb();
++	rx_desc->ctrl = MAL_RX_CTRL_EMPTY | MAL_RX_CTRL_INTR | (slot == (NUM_RX_BUFF - 1) ? MAL_RX_CTRL_WRAP : 0);
++	return 0;
++}
++
++inline int alloc_rx_skb(struct emac_instance *dev, int slot) {
++	struct sk_buff *skb;
++	skb = __netdev_alloc_skb_ip_align(dev->ndev, dev->rx_skb_size, GFP_KERNEL);
++    if (unlikely(!skb))	return -ENOMEM;
++	return __prepare_rx_skb(skb, dev, slot, &dev->rx_desc[slot]);
++}
++EXPORT_SYMBOL_GPL(alloc_rx_skb);
++
++static inline int alloc_rx_skb_napi(struct emac_instance *dev, int slot) {
++	struct sk_buff *skb;
++	skb = napi_alloc_skb(&dev->mal->napi, dev->rx_skb_size);
++    if (unlikely(!skb))	return -ENOMEM;
++	return __prepare_rx_skb(skb, dev, slot, &dev->rx_desc[slot]);
++}
++
++/* NAPI poll context */
++static int __always_inline poll_rx(void *param, int budget) {
++	register struct emac_instance *dev = param;
++	register int slot = dev->rx_slot, received = 0;
++	register int len;
++	register struct sk_buff *skb, **skb_sg;
++
++	DBG2(dev, "poll_rx(%d)" NL, budget);
++
++ again:
++	while (budget > 0) {
++		register u16 ctrl = dev->rx_desc[slot].ctrl;
++
++		if (unlikely(ctrl & MAL_RX_CTRL_EMPTY)) break;
++
++		skb = dev->rx_skb[slot];
++		mb();
++		len = dev->rx_desc[slot].data_len;
++
++		if (unlikely(!MAL_IS_SINGLE_RX(ctrl))) goto sg;
++
++		ctrl &= EMAC_BAD_RX_MASK;
++		if (unlikely(ctrl && ctrl != EMAC_RX_TAH_BAD_CSUM)) {
++			parse_rx_error(dev, ctrl);
++			++dev->estats.rx_dropped_error;
++			recycle_rx_skb(dev, slot, 0, skb->data);
++			len = 0;
++			goto next;
++		}
++
++		if (unlikely(len < ETH_HLEN)) {
++			++dev->estats.rx_dropped_stack;
++			recycle_rx_skb(dev, slot, len, skb->data);
++			goto next;
++		}
++
++		if (len < EMAC_RX_COPY_THRESH) {
++			struct sk_buff *copy_skb = napi_alloc_skb(&dev->mal->napi, len);
++			if (unlikely(!copy_skb)) goto oom;
++
++			memcpy(copy_skb->data - NET_IP_ALIGN, skb->data - NET_IP_ALIGN, len + NET_IP_ALIGN);  //is cacheable_memcpy
++			recycle_rx_skb(dev, slot, len, skb->data);
++			skb = copy_skb;
++		} else if (unlikely(alloc_rx_skb_napi(dev, slot))) goto oom;
++
++		skb_putl(skb, len); //ECO: local version of skb_put
++	push_packet:
++		skb->protocol = eth_type_trans(skb, dev->ndev);
++		rx_csum(dev, skb, ctrl);
++
++		if (unlikely(netif_receive_skb(skb) == NET_RX_DROP)) ++dev->estats.rx_dropped_stack;
++	next:
++		++dev->stats.rx_packets;
++	skip:
++		dev->stats.rx_bytes += len;
++		slot = NXT_RX_SLOT(slot);
++		--budget;
++		++received;
++		continue;
++	sg:
++        skb_sg = &dev->rx_sg_skb;
++        // ECO TODO test if unlikely
++		if (ctrl & MAL_RX_CTRL_FIRST) {
++			//BUG_ON(dev->rx_sg_skb); // panic is not really helpful here
++			if (unlikely(alloc_rx_skb_napi(dev, slot))) {
++				DBG(dev, "rx OOM %d" NL, slot);
++				++dev->estats.rx_dropped_oom;
++				recycle_rx_skb(dev, slot, 0, skb->data);
++                goto skip;
++			} else {
++				//dev->rx_sg_skb = skb;
++                *skb_sg = skb;
++				skb_putl(skb, len);
++                goto skip;
++			}
++		} else if (rx_sg_append(dev, slot, len, skb->data, skb_sg) && (ctrl & MAL_RX_CTRL_LAST)) {
++			//skb = dev->rx_sg_skb;
++            //dev->rx_sg_skb = NULL;
++            skb = *skb_sg;
++            *skb_sg = NULL; 			
++
++			ctrl &= EMAC_BAD_RX_MASK;
++			if (unlikely(ctrl && ctrl != EMAC_RX_TAH_BAD_CSUM)) {
++				parse_rx_error(dev, ctrl);
++				++dev->estats.rx_dropped_error;
++				dev_kfree_skb(skb);
++				len = 0;
++			} else goto push_packet;
++		}
++		goto skip;
++	oom:
++		DBG(dev, "rx OOM %d" NL, slot);
++		/* Drop the packet and recycle skb */
++		++dev->estats.rx_dropped_oom;
++		recycle_rx_skb(dev, slot, 0, skb->data);
++		goto next;
++	}
++
++	if (received) {
++		DBG2(dev, "rx %d BDs" NL, received);
++		dev->rx_slot = slot;
++	}
++
++	if (unlikely(budget && test_bit(MAL_COMMAC_RX_STOPPED, &dev->commac.flags))) {
++		mb();
++		if (!(dev->rx_desc[slot].ctrl & MAL_RX_CTRL_EMPTY)) {
++			DBG2(dev, "rx restart" NL);
++			received = 0;
++			goto again;
++		}
++
++		if (dev->rx_sg_skb) {
++			DBG2(dev, "dropping partial rx packet" NL);
++			++dev->estats.rx_dropped_error;
++			dev_kfree_skb(dev->rx_sg_skb);
++			dev->rx_sg_skb = NULL;
++		}
++
++		clear_bit(MAL_COMMAC_RX_STOPPED, &dev->commac.flags);
++		mal_enable_rx_channel(dev->mal, dev->mal_rx_chan);
++		emac_rx_enable(dev);
++		dev->rx_slot = 0;
++	}
++	return received;
++}
++
++/* Tx lock BHs */
++static void parse_tx_error(struct emac_instance *dev, u16 ctrl) {
++	struct emac_error_stats *st = &dev->estats;
++
++	DBG(dev, "BD TX error %04x" NL, ctrl);
++
++	++st->tx_bd_errors;
++	if (ctrl & EMAC_TX_ST_BFCS)	++st->tx_bd_bad_fcs;
++	if (ctrl & EMAC_TX_ST_LCS)	++st->tx_bd_carrier_loss;
++	if (ctrl & EMAC_TX_ST_ED)	++st->tx_bd_excessive_deferral;
++	if (ctrl & EMAC_TX_ST_EC)	++st->tx_bd_excessive_collisions;
++	if (ctrl & EMAC_TX_ST_LC)	++st->tx_bd_late_collision;
++	if (ctrl & EMAC_TX_ST_MC)	++st->tx_bd_multple_collisions;
++	if (ctrl & EMAC_TX_ST_SC)	++st->tx_bd_single_collision;
++	if (ctrl & EMAC_TX_ST_UR)	++st->tx_bd_underrun;
++	if (ctrl & EMAC_TX_ST_SQE)	++st->tx_bd_sqe;
++}
++
++#define netif_queue_stopped(ndev) test_bit(__QUEUE_STATE_DRV_XOFF, &ndev->_tx[0].state)
++static __always_inline void poll_tx(struct emac_instance *dev) {
++	DBG2(dev, "poll_tx, %d %d" NL, dev->tx_cnt, dev->ack_slot);
++
++    netif_tx_lock_bh(dev->ndev);
++	if (likely(dev->tx_cnt)) {	// We have something to transmit
++    	register u16 ctrl;
++		register int slot = dev->ack_slot, n = 0;
++		//register int slot = ack_slot, n = 0;
++        register struct sk_buff *skb;
++	again:  /* Release slots and skb's for packets transmited */
++		ctrl = dev->tx_desc[slot].ctrl;
++ 		if (likely(!(ctrl & MAL_TX_CTRL_READY))) {
++			skb = dev->tx_skb[slot];
++			++n;
++
++			if (likely(skb)) {
++				dev_kfree_skb(skb);
++				dev->tx_skb[slot] = NULL;
++			}
++			slot = NXT_TX_SLOT(slot);
++			if (unlikely(ctrl & EMAC_IS_BAD_TX)) parse_tx_error(dev, ctrl);
++			if (--dev->tx_cnt) goto again;
++		} 
++
++		if (likely(n)) {
++			dev->ack_slot = slot;
++			//ack_slot = slot;
++ 			if (unlikely(netif_queue_stopped(dev->ndev) && dev->tx_cnt < EMAC_TX_WAKEUP_THRESH))
++				netif_wake_queue(dev->ndev);
++			DBG2(dev, "tx %d pkts" NL, n);
++		}
++ 	}
++#ifdef CONFIG_IBM_EMAC_MASK_CEXT
++	else {
++		DBG(dev, "Testing for idle... " NL);
++		if (atomic_read(&dev->mask_cext_enable)) {
++			if (!atomic_read(&dev->idle_mode)) {
++			      DBG(dev, "Entering idle mode" NL);
++			      emac_start_idlemode(dev);
++			      atomic_set(&dev->idle_mode, 1);
++			} else DBG(dev, "Already In Idle Mode" NL);
++		}
++	}
++#endif
++	netif_tx_unlock_bh(dev->ndev);
++}
++
++/* NAPI poll context */
++static __always_inline int peek_rx_sg(struct emac_instance *dev) {
++	register int slot = dev->rx_slot;  // start will last used slot
++    register u16 *rx_desc_ctrl = (u16 *)&dev->rx_desc[slot];
++	while (1) {
++        if (*rx_desc_ctrl & MAL_RX_CTRL_EMPTY) return 0;
++		else if (unlikely(*rx_desc_ctrl & MAL_RX_CTRL_LAST)) return 1;
++		slot = NXT_RX_SLOT(slot);
++        rx_desc_ctrl += sizeof(struct mal_descriptor);
++        if (unlikely(slot == 0)) rx_desc_ctrl = (u16 *) &dev->rx_desc[0]; //wrap around
++	}
++}
++
++#endif
++
 +static int mal_poll(struct napi_struct *napi, int budget) {
  	struct mal_instance *mal = container_of(napi, struct mal_instance, napi);
- 	struct list_head *l;
+-	struct list_head *l;
 -	int received = 0;
 +	register int received = 0;
  	unsigned long flags;
- 
+-
++#if defined (CONFIG_APM821xx) // APM821xx has just a single EMAC/MAL RX/TX channel
++    #define continue_if(x)
++    register struct mal_commac *mc = mal->poll_commac;
++    register struct emac_instance *dev = mc->dev;
++#else
++    #define continue_if(x) if (x) continue
++	struct list_head *l;
++#endif
  	MAL_DBG2(mal, "poll(%d)" NL, budget);
  
  	/* Process TX skbs */
++#if defined (CONFIG_APM821xx) // APM821xx has just a single EMAC/MAL RX/TX channel
++	//if (mal->poll_tx) {
++    {
++#else
  	list_for_each(l, &mal->poll_list) {
 -		struct mal_commac *mc =
 -			list_entry(l, struct mal_commac, poll_list);
+-		mc->ops->poll_tx(mc->dev);
+-	}
 +		struct mal_commac *mc =	list_entry(l, struct mal_commac, poll_list);
- 		mc->ops->poll_tx(mc->dev);
- 	}
++        struct emac_instance *dev = mc->dev;
++#endif
++		//mc->ops->poll_tx(dev); // Poll if we have something to transmit
++		poll_tx(dev);
++        //mal->poll_tx = 0;
++ 	}
  
- 	/* Process RX skbs.
+-	/* Process RX skbs.
 -	 *
 -	 * We _might_ need something more smart here to enforce polling
 -	 * fairness.
 -	 */
-+	 * We _might_ need something more smart here to enforce polling fairness. */
- 	list_for_each(l, &mal->poll_list) {
+-	list_for_each(l, &mal->poll_list) {
 -		struct mal_commac *mc =
 -			list_entry(l, struct mal_commac, poll_list);
 -		int n;
+-		if (unlikely(test_bit(MAL_COMMAC_POLL_DISABLED, &mc->flags)))
+-			continue;
+-		n = mc->ops->poll_rx(mc->dev, budget - received);
++
++	/* Process RX skbs */
++#if defined (CONFIG_APM821xx) // APM821xx has just a single EMAC/MAL RX/TX channel
++    //if (!mal->poll_rx) return 0;
++	if (likely(mc && !test_bit(MAL_COMMAC_POLL_DISABLED, &mc->flags))) {
++#else
++	 // We _might_ need something more smart here to enforce polling fairness. 
++    list_for_each(l, &mal->poll_list) {
 +		struct mal_commac *mc =	list_entry(l, struct mal_commac, poll_list);
++        struct emac_instance *dev = mc->dev;
++#endif
++
 +		register int n;
- 		if (unlikely(test_bit(MAL_COMMAC_POLL_DISABLED, &mc->flags)))
- 			continue;
- 		n = mc->ops->poll_rx(mc->dev, budget - received);
++        continue_if(unlikely(test_bit(MAL_COMMAC_POLL_DISABLED, &mc->flags)));
++		//n = mc->ops->poll_rx(dev, budget - received);
++		n = poll_rx(dev, budget - received);
  		if (n) {
  			received += n;
 -			if (received >= budget)
 -				return budget;
 +#if LINUX_VERSION_CODE < KERNEL_VERSION(4,19,0)
 +			budget -= n;
-+			if (budget <= 0) goto more_work; // XXX What if this is the last one ?
++			if (budget <= 0) return received;  //goto more_work; // XXX What if this is the last one ?
 +#else
 +			if (received >= budget) return budget;
 +#endif
  		}
  	}
--
+ 
 +	/* We need to disable IRQs to protect from RXDE IRQ here */
 +#if LINUX_VERSION_CODE < KERNEL_VERSION(4,19,0)
 +	spin_lock_irqsave(&mal->lock, flags);
@@ -4895,19 +5325,40 @@
 -
 +#endif
  	/* Check for "rotting" packet(s) */
++#if defined (CONFIG_APM821xx) // APM821xx has just a single EMAC/MAL RX/TX channel
++	if (likely(mc && !test_bit(MAL_COMMAC_POLL_DISABLED, &mc->flags))) {
++#else
  	list_for_each(l, &mal->poll_list) {
 -		struct mal_commac *mc =
 -			list_entry(l, struct mal_commac, poll_list);
-+		struct mal_commac *mc =	list_entry(l, struct mal_commac, poll_list);
- 		if (unlikely(test_bit(MAL_COMMAC_POLL_DISABLED, &mc->flags)))
- 			continue;
+-		if (unlikely(test_bit(MAL_COMMAC_POLL_DISABLED, &mc->flags)))
+-			continue;
 -		if (unlikely(mc->ops->peek_rx(mc->dev) ||
 -			     test_bit(MAL_COMMAC_RX_STOPPED, &mc->flags))) {
-+		if (unlikely(mc->ops->peek_rx(mc->dev) || test_bit(MAL_COMMAC_RX_STOPPED, &mc->flags))) {
++		struct mal_commac *mc =	list_entry(l, struct mal_commac, poll_list);
++        struct emac_instance *dev = mc->dev;
++#endif
++        continue_if(unlikely(test_bit(MAL_COMMAC_POLL_DISABLED, &mc->flags)));
++
++		//if (unlikely(mc->ops->peek_rx(dev) || test_bit(MAL_COMMAC_RX_STOPPED, &mc->flags))) {
++		if (unlikely(peek_rx_sg(dev) || test_bit(MAL_COMMAC_RX_STOPPED, &mc->flags))) {
  			MAL_DBG2(mal, "rotting packet" NL);
- 			if (!napi_reschedule(napi))
- 				goto more_work;
-@@ -460,12 +512,10 @@
+-			if (!napi_reschedule(napi))
+-				goto more_work;
++			if (!napi_reschedule(napi))	return received; //	goto more_work;
+ 
+ 			spin_lock_irqsave(&mal->lock, flags);
+ 			mal_disable_eob_irq(mal);
+ 			spin_unlock_irqrestore(&mal->lock, flags);
+ 		}
+-		mc->ops->poll_tx(mc->dev);
++		//mc->ops->poll_tx(dev);
++		poll_tx(dev);
+ 	}
+ 
+- more_work:
++// more_work:
+ 	MAL_DBG2(mal, "poll() %d <- %d" NL, budget, received);
  	return received;
  }
  
@@ -4919,9 +5370,11 @@
  	MAL_DBG(mal, "reset" NL);
 -
  	set_mal_dcrn(mal, MAL_CFG, MAL_CFG_SR);
++    mal->mal_cfg = MAL_CFG_SR;
  
  	/* Wait for reset to complete (1 system clock) */
-@@ -476,10 +526,8 @@
+ 	while ((get_mal_dcrn(mal, MAL_CFG) & MAL_CFG_SR) && n)
+@@ -476,10 +889,8 @@
  		printk(KERN_ERR "mal%d: reset timeout\n", mal->index);
  }
  
@@ -4934,7 +5387,7 @@
  }
  
  void *mal_dump_regs(struct mal_instance *mal, void *buf)
-@@ -516,102 +564,137 @@
+@@ -516,102 +927,141 @@
  	return regs + 1;
  }
  
@@ -5100,8 +5553,12 @@
 +	}
 +#endif
 +
++#if defined (CONFIG_APM821xx) // APM821xx has just a single EMAC/MAL RX/TX channel
++    mal->commac = NULL;
++#else
  	INIT_LIST_HEAD(&mal->poll_list);
  	INIT_LIST_HEAD(&mal->list);
++#endif
  	spin_lock_init(&mal->lock);
  
  	init_dummy_netdev(&mal->dummy_dev);
@@ -5112,7 +5569,7 @@
  
  	/* Load power-on reset defaults */
  	mal_reset(mal);
-@@ -620,10 +703,8 @@
+@@ -620,38 +1070,55 @@
  	cfg = (mal->version == 2) ? MAL2_CFG_DEFAULT : MAL1_CFG_DEFAULT;
  	cfg |= MAL_CFG_PLBB | MAL_CFG_OPBBL | MAL_CFG_LEA;
  
@@ -5125,7 +5582,10 @@
  		cfg &= ~(MAL2_CFG_RPP_10 | MAL2_CFG_WPP_10);
  
  	/* Apply configuration */
-@@ -633,25 +714,43 @@
+ 	set_mal_dcrn(mal, MAL_CFG, cfg);
++    mal->mal_cfg = cfg; // Cache mal configuration
+ 
+ 	/* Allocate space for BD rings */
  	BUG_ON(mal->num_tx_chans <= 0 || mal->num_tx_chans > 32);
  	BUG_ON(mal->num_rx_chans <= 0 || mal->num_rx_chans > 32);
  
@@ -5142,7 +5602,7 @@
 +		mal->bd_dma  = (u32)mal->bd_phys;
 +	}
 +
-+	if (mal->bd_virt == NULL) {
+ 	if (mal->bd_virt == NULL) {
 +		// Allocate BD on SDRAM in case !MAL_DESC_MEM_OCM or failed OCM alloc
 +		if (mal->desc_memory == MAL_DESC_MEM_OCM){
 +			printk(KERN_INFO "mal%d: failed OCM alloc, descriptor-memory = SDRAM\n", index);
@@ -5151,7 +5611,7 @@
 +		mal->bd_virt = dma_alloc_coherent(dp, bd_size, &mal->bd_dma, GFP_KERNEL |__GFP_ZERO);
 +	}
 +
- 	if (mal->bd_virt == NULL) {
++	if (mal->bd_virt == NULL) {
 +		printk(KERN_ERR "mal%d: out of memory allocating RX/TX descriptors!\n", index);
  		err = -ENOMEM;
  		goto fail_unmap;
@@ -5180,7 +5640,7 @@
  
  	if (mal_has_feature(mal, MAL_FTR_COMMON_ERR_INT)) {
  		irqflags = IRQF_SHARED;
-@@ -664,30 +763,70 @@
+@@ -664,30 +1131,70 @@
  	}
  
  	err = request_irq(mal->serr_irq, hdlr_serr, irqflags, "MAL SERR", mal);
@@ -5202,7 +5662,7 @@
 +
 +#ifdef CONFIG_IBM_EMAC_INTR_COALESCE
 +	for (i = 0; (i < num_phys_chans) && (!mal->coalesce_disabled); i++) {
-+		err = request_irq(mal->txcoal_irq[i], mal_coal, 0, tx_coal_irqname[i], mal);
++		err = request_irq(mal->txcoal_irq[i], mal_coal_tx, 0, tx_coal_irqname[i], mal);
 +		if (err) {
 +			printk(KERN_INFO "MAL: TxCoal%d ReqIRQ failed - disabling coalescing\n", i);
 +			mal->txcoal_irq[i] = NO_IRQ;
@@ -5211,7 +5671,7 @@
 +		}
 +	}
 +	for (i = 0; (i < num_phys_chans) && (!mal->coalesce_disabled); i++) {
-+		err = request_irq(mal->rxcoal_irq[i], mal_coal, 0, rx_coal_irqname[i], mal);
++		err = request_irq(mal->rxcoal_irq[i], mal_coal_rx, 0, rx_coal_irqname[i], mal);
 +		if (err) {
 +			printk(KERN_INFO "MAL: RxCoal%d ReqIRQ failed - disabling coalescing\n", i);
 +			mal->rxcoal_irq[i] = NO_IRQ;
@@ -5264,7 +5724,7 @@
  	       mal->num_tx_chans, mal->num_rx_chans);
  
  	/* Advertise this instance to the rest of the world */
-@@ -697,37 +836,44 @@
+@@ -697,73 +1204,79 @@
  	return 0;
  
   fail6:
@@ -5315,12 +5775,16 @@
 -		WARN(1, KERN_EMERG
 -		       "mal%d: commac list is not empty on remove!\n",
 -		       mal->index);
-+	if (!list_empty(&mal->list)) /* This is *very* bad */
+-
++#if defined (CONFIG_APM821xx) // APM821xx has just a single EMAC/MAL RX/TX channel
++    if (mal->commac) 
++#else
++	if (!list_empty(&mal->list)) /* Removing mal with active commac : *very* bad */
++#endif
 +		WARN(1, KERN_EMERG "mal%d: commac list is not empty on remove!\n", mal->index);
- 
  	free_irq(mal->serr_irq, mal);
  	free_irq(mal->txde_irq, mal);
-@@ -735,35 +881,31 @@
+ 	free_irq(mal->txeob_irq, mal);
  	free_irq(mal->rxde_irq, mal);
  	free_irq(mal->rxeob_irq, mal);
  
@@ -5375,7 +5839,7 @@
  	{},
  };
  
-@@ -776,12 +918,10 @@
+@@ -776,12 +1289,10 @@
  	.remove = mal_remove,
  };
  
@@ -5390,9 +5854,9 @@
 +void mal_exit(void) {
  	platform_driver_unregister(&mal_of_driver);
  }
---- a/drivers/net/ethernet/ibm/emac/mal.h	2019-02-20 10:25:50.000000000 +0100
-+++ b/drivers/net/ethernet/ibm/emac/mal.h	2019-03-11 17:19:25.667250665 +0100
-@@ -39,104 +39,101 @@
+--- a/drivers/net/ethernet/ibm/emac/mal.h	2019-04-03 06:26:31.000000000 +0200
++++ b/drivers/net/ethernet/ibm/emac/mal.h	2019-04-02 12:01:24.253775000 +0200
+@@ -39,104 +39,103 @@
   */
  
  /* MALx DCR registers */
@@ -5550,12 +6014,14 @@
 -static inline int mal_tx_chunks(int len)
 -{
 -	return (len + MAL_MAX_TX_SIZE - 1) / MAL_MAX_TX_SIZE;
++/* Since MAL_MAX_TX_SIZE is close to 4K, this is a good-enough esimate */
++#define MAL_ESTIMATE_TX_CHUNKS(len) (len >> 12)
 +static inline int mal_tx_chunks(int len) {
 +    return DIV_ROUND_UP(len, MAL_MAX_TX_SIZE);
  }
  
  #define MAL_CHAN_MASK(n)	(0x80000000 >> (n))
-@@ -155,7 +152,13 @@
+@@ -155,7 +154,13 @@
  #define MAL_RX_CTRL_CM		0x2000
  #define MAL_RX_CTRL_LAST	0x1000
  #define MAL_RX_CTRL_FIRST	0x0800
@@ -5569,7 +6035,7 @@
  #define MAL_RX_CTRL_SINGLE	(MAL_RX_CTRL_LAST | MAL_RX_CTRL_FIRST)
  #define MAL_IS_SINGLE_RX(ctrl)	(((ctrl) & MAL_RX_CTRL_SINGLE) == MAL_RX_CTRL_SINGLE)
  
-@@ -165,6 +168,79 @@
+@@ -165,29 +170,112 @@
  #define MAL_TX_CTRL_LAST	0x1000
  #define MAL_TX_CTRL_INTR	0x0400
  
@@ -5649,8 +6115,23 @@
  struct mal_commac_ops {
  	void	(*poll_tx) (void *dev);
  	int	(*poll_rx) (void *dev, int budget);
-@@ -184,10 +260,19 @@
- 	struct list_head	list;
+ 	int	(*peek_rx) (void *dev);
+ 	void	(*rxde) (void *dev);
+ };
+-
+ struct mal_commac {
+ 	struct mal_commac_ops	*ops;
+ 	void			*dev;
++#if !defined (CONFIG_APM821xx)
+ 	struct list_head	poll_list;
++	struct list_head	list;
++#endif
+ 	long       		flags;
+ #define MAL_COMMAC_RX_STOPPED		0
+ #define MAL_COMMAC_POLL_DISABLED	1
+ 	u32			tx_chan_mask;
+ 	u32			rx_chan_mask;
+-	struct list_head	list;
  };
  
 +#ifdef CONFIG_IBM_EMAC_INTR_COALESCE
@@ -5670,10 +6151,11 @@
  	int			num_tx_chans;	/* Number of TX channels */
  	int			num_rx_chans;	/* Number of RX channels */
  	int 			txeob_irq;	/* TX End Of Buffer IRQ  */
-@@ -196,6 +281,24 @@
+@@ -196,14 +284,40 @@
  	int			rxde_irq;	/* RX Descriptor Error IRQ */
  	int			serr_irq;	/* MAL System Error IRQ    */
  
+-	struct list_head	poll_list;
 +#if defined(CONFIG_IBM_EMAC_INTR_COALESCE)
 +	int			txcoal0_irq;	/* COAL */
 +	int			txcoal1_irq;	/* COAL */
@@ -5692,10 +6174,18 @@
 +	struct timer_list mal_coal_timer;
 +#endif
 +
- 	struct list_head	poll_list;
  	struct napi_struct	napi;
  
-@@ -204,6 +307,7 @@
++#if defined (CONFIG_APM821xx)
++    struct mal_commac  *poll_commac;
++    struct mal_commac  *commac;
++    u32         poll_tx;
++    u32         poll_rx;
++#else
++	struct list_head	poll_list;
+ 	struct list_head	list;
++#endif
+ 	u32			tx_chan_mask;
  	u32			rx_chan_mask;
  
  	dma_addr_t		bd_dma;
@@ -5703,11 +6193,12 @@
  	struct mal_descriptor	*bd_virt;
  
  	struct platform_device	*ofdev;
-@@ -213,63 +317,56 @@
+@@ -213,63 +327,57 @@
  	struct net_device	dummy_dev;
  
  	unsigned int features;
 +	u32			net_alloc_offset;
++    u32         mal_cfg;    /* Cache mal CFG */
 +#ifdef CONFIG_IBM_EMAC_INTR_COALESCE
 +	int			txcoal_irq[MAL_MAX_PHYS_CHANNELS];	/* MAL TxCoalesce Error IRQ    */
 +	int			rxcoal_irq[MAL_MAX_PHYS_CHANNELS];	/* MAL RxCoalesce IRQ    */
@@ -5785,7 +6276,7 @@
  int mal_tx_bd_offset(struct mal_instance *mal, int channel);
  int mal_rx_bd_offset(struct mal_instance *mal, int channel);
  
-@@ -280,6 +377,9 @@
+@@ -280,6 +388,9 @@
  
  void mal_poll_disable(struct mal_instance *mal, struct mal_commac *commac);
  void mal_poll_enable(struct mal_instance *mal, struct mal_commac *commac);
@@ -5795,7 +6286,7 @@
  
  /* Add/remove EMAC to/from MAL polling list */
  void mal_poll_add(struct mal_instance *mal, struct mal_commac *commac);
-@@ -289,7 +389,6 @@
+@@ -289,7 +400,6 @@
  struct mal_regs {
  	u32 tx_count;
  	u32 rx_count;
@@ -5803,8 +6294,8 @@
  	u32 cfg;
  	u32 esr;
  	u32 ier;
---- a/drivers/net/ethernet/ibm/emac/phy.c	2019-02-20 10:25:50.000000000 +0100
-+++ b/drivers/net/ethernet/ibm/emac/phy.c	2019-03-11 17:19:25.667250665 +0100
+--- a/drivers/net/ethernet/ibm/emac/phy.c	2019-04-03 06:26:31.000000000 +0200
++++ b/drivers/net/ethernet/ibm/emac/phy.c	2019-03-11 18:19:26.000000000 +0100
 @@ -24,6 +24,8 @@
  #include <linux/mii.h>
  #include <linux/ethtool.h>
@@ -6363,8 +6854,8 @@
  	return 0;
  }
  
---- a/drivers/net/ethernet/ibm/emac/phy.h	2019-02-20 10:25:50.000000000 +0100
-+++ b/drivers/net/ethernet/ibm/emac/phy.h	2019-03-11 17:19:25.671250842 +0100
+--- a/drivers/net/ethernet/ibm/emac/phy.h	2019-04-03 06:26:31.000000000 +0200
++++ b/drivers/net/ethernet/ibm/emac/phy.h	2019-03-11 18:19:26.000000000 +0100
 @@ -42,8 +42,7 @@
  struct mii_phy_def {
  	u32 phy_id;		/* Concatenated ID1 << 16 | ID2 */
@@ -6413,8 +6904,8 @@
  int emac_mii_phy_probe(struct mii_phy *phy, int address);
  int emac_mii_reset_phy(struct mii_phy *phy);
  int emac_mii_reset_gpcs(struct mii_phy *phy);
---- a/drivers/net/ethernet/ibm/emac/rgmii.c	2019-02-20 10:25:50.000000000 +0100
-+++ b/drivers/net/ethernet/ibm/emac/rgmii.c	2019-03-11 17:19:25.671250842 +0100
+--- a/drivers/net/ethernet/ibm/emac/rgmii.c	2019-04-03 06:26:31.000000000 +0200
++++ b/drivers/net/ethernet/ibm/emac/rgmii.c	2019-03-11 18:19:26.000000000 +0100
 @@ -50,8 +50,7 @@
  #define RGMII_SSR_1000(idx)	(0x4 << ((idx) * 8))
  
@@ -6718,8 +7209,8 @@
 +void rgmii_exit(void) {
  	platform_driver_unregister(&rgmii_driver);
  }
---- a/drivers/net/ethernet/ibm/emac/rgmii.h	2019-02-20 10:25:50.000000000 +0100
-+++ b/drivers/net/ethernet/ibm/emac/rgmii.h	2019-03-11 17:19:25.671250842 +0100
+--- a/drivers/net/ethernet/ibm/emac/rgmii.h	2019-04-03 06:26:31.000000000 +0200
++++ b/drivers/net/ethernet/ibm/emac/rgmii.h	2019-03-11 18:19:26.000000000 +0100
 @@ -77,6 +77,6 @@
  # define rgmii_set_speed(x,y,z)	do { } while(0)
  # define rgmii_get_regs_len(x)	0
@@ -6729,9 +7220,9 @@
  
 -#endif /* __IBM_NEWEMAC_RGMII_H */
 +#endif	/* __IBM_NEWEMAC_RGMII_H */
---- a/drivers/net/ethernet/ibm/emac/tah.c	2019-02-20 10:25:50.000000000 +0100
-+++ b/drivers/net/ethernet/ibm/emac/tah.c	2019-03-11 17:19:25.671250842 +0100
-@@ -24,71 +24,116 @@
+--- a/drivers/net/ethernet/ibm/emac/tah.c	2019-04-03 06:26:31.000000000 +0200
++++ b/drivers/net/ethernet/ibm/emac/tah.c	2019-03-21 19:51:48.000000000 +0100
+@@ -24,71 +24,87 @@
  #include "emac.h"
  #include "core.h"
  
@@ -6781,13 +7272,10 @@
 -		 TAH_MR_CVR | TAH_MR_ST_768 | TAH_MR_TFS_10KB | TAH_MR_DTFP |
 -		 TAH_MR_DIG);
 +	/* 10KB TAH TX FIFO accommodates the max MTU of 9000 */ // ECO
-+	//out_be32(&p->mr, TAH_MR_CVR | TAH_MR_ST_768 | TAH_MR_TFS_10KB | TAH_MR_DTFP | TAH_MR_DIG);
 +	out_be32(&p->mr, TAH_MR_CVR | TAH_MR_ST_256 | TAH_MR_TFS_10KB | TAH_MR_DTFP | TAH_MR_DIG);
-+	//out_be32(&p->mr, TAH_MR_CVR | TAH_MR_ST_1536 | TAH_MR_TFS_10KB | TAH_MR_DTFP | TAH_MR_DIG);
 +
 +	/* Re-initialize SSRx values */ // (ECO)
-+	//for (n=0; n < TAH_NO_SSR; n++) dev->ssr_order[n] = n;
-+    	for (n = 0; n < TAH_NO_SSR; n++) tah_set_ssr(ofdev, n, ssr_tmp[n]);
++   	for (n = 0; n < TAH_NO_SSR; n++) tah_set_ssr(ofdev, n, ssr_tmp[n]);
  }
  
 -int tah_get_regs_len(struct platform_device *ofdev)
@@ -6822,39 +7310,13 @@
 +void tah_set_ssr(struct platform_device *ofdev, int index, int seg_size) {
 +	struct tah_instance *dev = dev_get_drvdata(&ofdev->dev);
 +	struct tah_regs __iomem *p = dev->base;
-+	//u32 ssr_tmp[TAH_NO_SSR];
-+	//int i, j = 0;
 +
-+	if ((index < 0) || (index > 5)) return;
++	if ((index < 0) || (index >= TAH_NO_SSR)) return;
 +	mutex_lock(&dev->lock);
-+	/// TAH segment size reg defines the number of half words */
++	// TAH segment size reg defines the number of half words */
 +	out_be32(&p->ssr0 + index, SS_2_TAH_SSR(seg_size >> 1));
-+
 +	dev->ssr[index] = seg_size & 0x3ffe;
-+/*
-+	// Sort the TAH_SSRx values and store the index in ssr_order array in high-to-low order
-+	for (i=0; i < TAH_NO_SSR; i++) {
-+		ssr_tmp[i] = dev->ssr[i];	
-+		dev->ssr_order[i] = i;
-+	}
-+	for (i =0; i < (TAH_NO_SSR-1); i++)			// Simple bubble short
-+		for (j = i+1; j < TAH_NO_SSR; j++)
-+			if (ssr_tmp[i] < ssr_tmp[j]) {
-+				swap(ssr_tmp[i], ssr_tmp[j]);
-+				swap(dev->ssr_order[i], dev->ssr_order[j]);
-+			}
-+#if 0
-+	printk(KERN_DEBUG "%s: Setting TAH_SSR%d[SS] to %d\n", ofdev->dev.of_node->full_name, index, 
-+			TAH_SSR_2_SS(in_be32(&p->ssr0+index)));
-+	printk("SSRx array: ");
-+	for (i = 0; i < TAH_NO_SSR; i++) printk("%d ", ssr_tmp[i]);
-+    	printk("\n");
 +
-+	printk("SSRx order: ");
-+	for (i = 0; i < TAH_NO_SSR; i++) printk("%d ", dev->ssr_order[i]);
-+	printk("\n");
-+#endif
-+*/
 +	mutex_unlock(&dev->lock);
 +}
 +
@@ -6874,7 +7336,7 @@
  	struct device_node *np = ofdev->dev.of_node;
  	struct tah_instance *dev;
  	struct resource regs;
-@@ -96,9 +141,7 @@
+@@ -96,9 +112,7 @@
  
  	rc = -ENOMEM;
  	dev = kzalloc(sizeof(struct tah_instance), GFP_KERNEL);
@@ -6885,7 +7347,7 @@
  	mutex_init(&dev->lock);
  	dev->ofdev = ofdev;
  
-@@ -109,21 +152,17 @@
+@@ -109,21 +123,17 @@
  	}
  
  	rc = -ENOMEM;
@@ -6909,7 +7371,7 @@
  	return 0;
  
   err_free:
-@@ -132,27 +171,18 @@
+@@ -132,27 +142,18 @@
  	return rc;
  }
  
@@ -6942,7 +7404,7 @@
  	{},
  };
  
-@@ -165,12 +195,10 @@
+@@ -165,12 +166,10 @@
  	.remove = tah_remove,
  };
  
@@ -6957,18 +7419,20 @@
 +void tah_exit(void) {
  	platform_driver_unregister(&tah_driver);
  }
---- a/drivers/net/ethernet/ibm/emac/tah.h	2019-02-20 10:25:50.000000000 +0100
-+++ b/drivers/net/ethernet/ibm/emac/tah.h	2019-03-11 17:19:25.671250842 +0100
-@@ -38,20 +38,23 @@
+--- a/drivers/net/ethernet/ibm/emac/tah.h	2019-04-03 06:26:31.000000000 +0200
++++ b/drivers/net/ethernet/ibm/emac/tah.h	2019-03-18 11:28:32.000000000 +0100
+@@ -38,20 +38,25 @@
  
  
  /* TAH device */
 +/* Default MTU values for common networks. Note that the first value may not correct as 
-+ * we will use the device's current MTU for SSR0 */
++ * we will use the device's current MTU for SSR0
 +#define TAH_SS_DEFAULT_9K	{9000, 4080, 1500, 1006, 576, 68}
 +#define TAH_SS_DEFAULT_4K	{4080, 1500, 1400, 1006, 576, 68}
-+#define TAH_SS_DEFAULT		{1500, 1400, 1280, 1006, 576, 68}
-+
++#define TAH_SS_DEFAULT		{1500, 1400, 1280, 1006, 576, 68}  */
++#define TAH_SS_DEFAULT_9K	{9000, 4080, 1500, 576, 256, 68}
++#define TAH_SS_DEFAULT_4K	{4080, 1500, 1400, 576, 256, 68}
++#define TAH_SS_DEFAULT		{1500, 1400, 1280, 576, 256, 68}
 +#define TAH_NO_SSR	6
  struct tah_instance {
  	struct tah_regs __iomem		*base;
@@ -6992,7 +7456,7 @@
  /* TAH engine */
  #define TAH_MR_CVR		0x80000000
  #define TAH_MR_SR		0x40000000
-@@ -69,6 +72,8 @@
+@@ -69,6 +74,8 @@
  #define TAH_MR_TFS_10KB		0x00a00000
  #define TAH_MR_DTFP		0x00100000
  #define TAH_MR_DIG		0x00080000
@@ -7001,7 +7465,7 @@
  
  #ifdef CONFIG_IBM_EMAC_TAH
  
-@@ -79,6 +84,8 @@
+@@ -79,6 +86,8 @@
  void tah_reset(struct platform_device *ofdev);
  int tah_get_regs_len(struct platform_device *ofdev);
  void *tah_dump_regs(struct platform_device *ofdev, void *buf);
@@ -7010,7 +7474,7 @@
  
  #else
  
-@@ -90,6 +97,6 @@
+@@ -90,6 +99,6 @@
  # define tah_get_regs_len(x)	0
  # define tah_dump_regs(x,buf)	(buf)
  
@@ -7018,3 +7482,65 @@
 +#endif	/* !CONFIG_IBM_EMAC_TAH */
  
  #endif /* __IBM_NEWEMAC_TAH_H */
+--- a/drivers/net/ethernet/ibm/emac/Kconfig	2019-04-03 06:26:31.000000000 +0200
++++ b/drivers/net/ethernet/ibm/emac/Kconfig	2019-03-18 10:14:40.000000000 +0100
+@@ -28,17 +28,50 @@
+ 	depends on IBM_EMAC
+ 	default "256"
+ 
+-config IBM_EMAC_RX_SKB_HEADROOM
+-	int "Additional RX skb headroom (bytes)"
+-	depends on IBM_EMAC
+-	default "0"
++config IBM_EMAC_INTR_COALESCE
++	bool "Hardware Interrupt coalescing"
++	depends on IBM_EMAC && (460EX || 460GT || 405EX || 460SX || APM821xx)
++	default n
+ 	help
+-	  Additional receive skb headroom. Note, that driver
+-	  will always reserve at least 2 bytes to make IP header
+-	  aligned, so usually there is no need to add any additional
+-	  headroom.
++	  When selected the Ethernet interrupt coalescing is selected.
++
++config IBM_EMAC_TX_COAL_COUNT
++	int "TX Coalescence frame count (packets)"
++	depends on IBM_EMAC_INTR_COALESCE
++	default "16"
++
++config IBM_EMAC_TX_COAL_TIMER
++	int "TX Coalescence timer (clock ticks)"
++	depends on IBM_EMAC_INTR_COALESCE
++	default "1000000"
+ 
+-	  If unsure, set to 0.
++config IBM_EMAC_RX_COAL_COUNT
++	int "RX Coalescence frame count (packets)"
++	depends on IBM_EMAC_INTR_COALESCE
++	default "1"
++
++config IBM_EMAC_RX_COAL_TIMER
++	int "RX Coalescence timer (clock ticks)"
++	depends on IBM_EMAC_INTR_COALESCE
++	default "1000000"
++	  
++config IBM_EMAC_MASK_CEXT
++	bool "Mask Carrier Extension signals"
++	depends on IBM_EMAC && APM821xx
++	default n
++	help
++	  During normal idle TX, continously send dummy packets to mask 
++	  the Carrier Extension signals. This creates a separate BD 
++	  specifically for this purpose.
++
++	  If unsure, set to N.
++
++config IBM_EMAC_SYSFS
++	bool "Sysfs support for IBM EMAC"
++	depends on IBM_EMAC
++	default n
++	help
++	  Export IBM EMAC parameters via /sys/class/net/eth* interface
+ 
+ config IBM_EMAC_DEBUG
+ 	bool "Debugging"

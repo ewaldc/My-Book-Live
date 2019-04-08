@@ -1,0 +1,97 @@
+--- a/net/core/dev.c	2019-02-20 10:25:50.000000000 +0100
++++ b/net/core/dev.c	2019-03-22 11:07:54.622045857 +0100
+@@ -8894,40 +8894,52 @@
+  * and performs basic initialization.  Also allocates subqueue structs
+  * for each queue on the device.
+  */
++
++#if defined(CONFIG_APM821xx)
++struct net_device *alloc_netdev_mqs_ocm(void *addr, int sizeof_priv, const char *name,
++#else
+ struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name,
++#endif
+ 		unsigned char name_assign_type,
+ 		void (*setup)(struct net_device *),
+ 		unsigned int txqs, unsigned int rxqs)
+ {
+ 	struct net_device *dev;
+-	unsigned int alloc_size;
+ 	struct net_device *p;
+ 
+-	BUG_ON(strlen(name) >= sizeof(dev->name));
+-
+-	if (txqs < 1) {
+-		pr_err("alloc_netdev: Unable to allocate device with zero queues\n");
+-		return NULL;
+-	}
++#if defined(CONFIG_APM821xx)
++	if (addr) p = (struct net_device *) addr;
++	else
++#endif
++    {
+ 
+-	if (rxqs < 1) {
+-		pr_err("alloc_netdev: Unable to allocate device with zero RX queues\n");
+-		return NULL;
+-	}
++		unsigned int alloc_size;
+ 
+-	alloc_size = sizeof(struct net_device);
+-	if (sizeof_priv) {
+-		/* ensure 32-byte alignment of private area */
+-		alloc_size = ALIGN(alloc_size, NETDEV_ALIGN);
+-		alloc_size += sizeof_priv;
++		BUG_ON(strlen(name) >= sizeof(dev->name));
++		if (txqs < 1) {
++			pr_err("alloc_netdev: Unable to allocate device with zero queues\n");
++			return NULL;
++		}
++
++		if (rxqs < 1) {
++			pr_err("alloc_netdev: Unable to allocate device with zero RX queues\n");
++			return NULL;
++		}
++
++		alloc_size = sizeof(struct net_device);
++		if (sizeof_priv) {
++			/* ensure 32-byte alignment of private area */
++			alloc_size = ALIGN(alloc_size, NETDEV_ALIGN);
++			alloc_size += sizeof_priv;
++		}
++		/* ensure 32-byte alignment of whole construct */
++		alloc_size += NETDEV_ALIGN - 1;
++
++		p = kvzalloc(alloc_size, GFP_KERNEL | __GFP_RETRY_MAYFAIL);
++		if (!p)
++			return NULL;
+ 	}
+-	/* ensure 32-byte alignment of whole construct */
+-	alloc_size += NETDEV_ALIGN - 1;
+-
+-	p = kvzalloc(alloc_size, GFP_KERNEL | __GFP_RETRY_MAYFAIL);
+-	if (!p)
+-		return NULL;
+-
++	
+ 	dev = PTR_ALIGN(p, NETDEV_ALIGN);
+ 	dev->padded = (char *)dev - (char *)p;
+ 
+@@ -8995,8 +9007,16 @@
+ 	netdev_freemem(dev);
+ 	return NULL;
+ }
++#if defined(CONFIG_APM821xx)
++struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name, unsigned char name_assign_type,
++		void (*setup)(struct net_device *),	unsigned int txqs, unsigned int rxqs)
++{
++	return alloc_netdev_mqs_ocm(NULL, sizeof_priv, name, name_assign_type, setup, txqs, rxqs);
++}
++										
++EXPORT_SYMBOL(alloc_netdev_mqs_ocm);
++#endif
+ EXPORT_SYMBOL(alloc_netdev_mqs);
+-
+ /**
+  * free_netdev - free network device
+  * @dev: device
+
