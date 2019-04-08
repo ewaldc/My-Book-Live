@@ -7,8 +7,8 @@ Following versions have been validated as "excellent":
 * 4.19.24 (passed 96 hours of torture test)
 * 4.19.25
 * 4.19.29
-* 4.19.33
-* 4.19.34
+* 4.19.33 (fastest as of now)
+* 4.19.34 (somewhat slower due)
 
 Pre-4.19.19 versions are to be avoided for stability reasons. Versions post 4.19.24 are most likely fine.
 Last version validated: 4.19.34
