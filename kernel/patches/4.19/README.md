@@ -4,11 +4,13 @@
 There is a reasonable chance these patches work with any 4.19.x version newer than 4.19.24.
 However, practical experience has shown that not every version is equally stable and/or performing.
 Following versions have been validated as "excellent":
-* 4.19.24
+* 4.19.24 (passed 96 hours of torture test)
 * 4.19.25
+* 4.19.29
+* 4.19.33
 * 4.19.34
 
-Pre-4.19.19 versions are to be avoided for stability reasons. Versions post 4.19.25 are most likely fine.
+Pre-4.19.19 versions are to be avoided for stability reasons. Versions post 4.19.24 are most likely fine.
 Last version validated: 4.19.34
 
 ## What's changed compared to 4.9.x ? ##
@@ -73,14 +75,15 @@ done
 ```
 
 Watch for any failed patches. Please accept my apologies if you hit an error and submit an issue...
+You will find that patch `702-phy_add_aneg_done_function.patch` has one failed hunk, which is due to the fact that the code changed for 4.19.34. 
 
 Copy one of the sample config files from [here](https://github.com/ewaldc/My-Book-Live/tree/master/kernel/patches/4.19/config) and duplicate as .config. Alternative build your own config file using `make menuconfig`:<br>
 `cp config.4.19 .config`
 
-You may want to play with the CONFIG_JUMP_LABEL parameter. 
+You may want to play with the CONFIG_JUMP_LABEL parameter, turning it on and off.
+I had to install gcc 8.30 on the MBL to link the kernel.  GCC 4.9x would crash.
 
-
-Build the kernel, resolve some potentional config file questions, and ... get a coffee/beer:<br>
+Build the kernel, resolve some potentional config file questions, and ... get a coffee/beer if compiling natively:<br>
 `make uImage`
 
 Build the modules:<br>
