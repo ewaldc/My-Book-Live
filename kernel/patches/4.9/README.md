@@ -11,9 +11,11 @@ Following versions have been validated as "excellent":
 * 4.9.119
 * 4.9.135
 * 4.9.149
+* 4.9.169
 
 Pre-4.9.31 versions are to be avoided for stability reasons. Versions post 4.9.135 are most likely fine.
-Last version validated: 4.9.149
+Last version validated: 4.9.169
+Last version going through 96-hours of stress test: 4.9.149
 
 ## What's included ##
 The latest version of the patches include:
