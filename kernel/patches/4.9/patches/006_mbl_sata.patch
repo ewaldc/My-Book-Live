@@ -730,7 +730,7 @@
 +	if (items >= 4)		return 1;
 +	return 0;
 +}
---- /dev/null	2017-06-21 20:25:20.252000000 +0000
++*/
 --- /dev/null	2019-02-15 08:22:25.095202567 +0000
 +++ b/drivers/ata/sata_dwc_ncq.c	2017-06-19 13:14:06.456871708 +0000
 @@ -0,0 +1,1598 @@
@@ -758,7 +758,7 @@
 +#include "sata_dwc_ncq.h"
 +
 +/* Globals */
-+static struct sata_dwc_device* dwc_dev_list[2]; // Device list
++//static struct sata_dwc_device* dwc_dev_list[2]; // Device list
 +static int pause_after_command_exec = 10;
 +static int pause_dma_pending = 10;
 +static int dma_intr_registered = 0;
@@ -790,13 +790,13 @@
 +#define DMA_REQUEST_CHANNEL(ch) (in_le32(&sata_dma_regs->dma_chan_en.low) & DMA_CHANNEL(ch)) ? -1 : ch
 +
 +/* DMA Interrupt service routine called for DMA with/without NCQ.  hsdev_instance can't be used since IRQ is shared */
-+static irqreturn_t dma_isr(int irq, void *hsdev_instance) {
++static irqreturn_t dma_isr(int irq, void *private_data) {
 +	struct dmaIntrRegs __iomem *intr_status = &(sata_dma_regs->interrupt_status);	/* Interrupt Status */
 +	volatile u32 tfr_reg = in_le32(&intr_status->tfr.low);
 +	volatile u32 err_reg = in_le32(&intr_status->error.low);
 +	//u32 statusIntr = in_le32(&sata_dma_regs->statusInt.low);	// Combined interrupt status register
 +	int chan = fls(tfr_reg | err_reg) - 1;		// dma channel is first bit 1
-+	struct sata_dwc_device *hsdev = dwc_dev_list[chan];
++    struct sata_dwc_device *hsdev = (struct sata_dwc_device *) private_data;
 +	struct ata_host *host = hsdev->host;
 +	struct ata_port *ap = host->ports[0];
 +	register struct sata_dwc_device_port *hsdevp = HSDEVP_FROM_AP(ap);
@@ -2262,7 +2262,7 @@
 +		}
 +	}
 +	hsdev->dev = dp;	// Save dev for later use in dev_xxx() routines
-+	dwc_dev_list[hsdev->dma_channel] = hsdev;	// Initialize global dev list
++	//dwc_dev_list[hsdev->dma_channel] = hsdev;	// Initialize global dev list
 +	
 +	hsdev->irq_dma = irq;	// Initialize AHB DMAC
 +	dma_init(hsdev);
@@ -2332,4 +2332,3 @@
 +MODULE_AUTHOR("Mark Miesfeld <mmiesfeld@amcc.com>");
 +MODULE_DESCRIPTION("DesignWare Cores SATA controller driver");
 +MODULE_VERSION(DRV_VERSION);
-
