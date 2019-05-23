@@ -45,5 +45,5 @@ Documentation is posted within each section.
 * improved section on installing custom kernels on original firmware
 * update on Debian sources.list (package repositories)
 
-## Known issue ##
+## Known issues ##
 * (Disk activity) led not working on 4.19 kernels 
