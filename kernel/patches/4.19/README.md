@@ -55,7 +55,7 @@ Uncompress the kernel:
 * in .gz format: `tar -xzf linux-4.19.24.tar.gz`
 * in .xz format: `tar -xJf linux-4.19.24.tar.xz`
 
-Change active directory: `cd linux-4.9.149`<br>
+Change active directory: `cd linux-4.19.24`<br>
 Optionaly, save some disk space by deleting uneeded architectures:
 ```
 cd arch
