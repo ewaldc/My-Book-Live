@@ -27,19 +27,23 @@ Documentation is posted within each section.
 
 ## Latest validated kernel support ##
 * Kernel 2.6.32.71, released Sat, 12 Mar 2016<br>
-* Kernel 4.9.149, released Wed, 9 Jan 2019<br>
-* Kernel 4.19.34, released Fri, 5 Apr 2019
+* Kernel 4.9.169, released Wed, 17 Apr 2019<br>
+* Kernel 4.19.44, released Fri, 17 May 2019
 
 
 ## What is new ? ##
 * __4.19 kernel (pre-compiled and patches) released__
-* high performance kernel 4.19.33 released
+* high performance kernel 4.19.33 & 4.19.44 released
 * patches updated for 4.19.34 (slightly slower due to a few code changes)
+* patches updated for 4.19.44
 * section on Samba
 * section on cross-compiling kernels
 * fixed a few Github postng issues
-* released 4.9.149
+* released 4.9.149 & 4.9.169
 * support for TFTP booting including netconsole support
 * initramfs section
 * improved section on installing custom kernels on original firmware
 * update on Debian sources.list (package repositories)
+
+## Known issues ##
+* (Disk activity) led not working on 4.19 kernels 
