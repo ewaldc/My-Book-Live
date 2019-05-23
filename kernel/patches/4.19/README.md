@@ -8,10 +8,11 @@ Following versions have been validated as "excellent":
 * 4.19.25
 * 4.19.29
 * 4.19.33 (fastest as of now)
-* 4.19.34 (somewhat slower due)
+* 4.19.34 (somewhat slower)
+* 4.19.44
 
 Pre-4.19.19 versions are to be avoided for stability reasons. Versions post 4.19.24 are most likely fine.
-Last version validated: 4.19.34
+Last version validated: 4.19.44
 
 ## What's changed compared to 4.9.x ? ##
 The DesignWare (DW) DMA and SATA driver code have evolved to levels of performance that are close enough to the custom SATA DWC NCQ driver to discontinue it.  All the credit for this work goes to the OpenWRT team (chunkeey). However, there is plenty of room for further tuning of these drivers and some of the code of the SATA DWC NCQ driver will be integrated.  The OpenWRT team will be able to pick up this work if they desire so.
@@ -76,6 +77,7 @@ done
 
 Watch for any failed patches. Please accept my apologies if you hit an error and submit an issue...
 You will find that patch `702-phy_add_aneg_done_function.patch` has one failed hunk, which is due to the fact that the code changed for 4.19.34. 
+Linux kernel 4.19.44 requires a different `201-extra_optimization.patch`.  The easiest solution is to leverage `patches_4.19.44.7z` which contains all relevant patches. 
 
 Copy one of the sample config files from [here](https://github.com/ewaldc/My-Book-Live/tree/master/kernel/patches/4.19/config) and duplicate as .config. Alternative build your own config file using `make menuconfig`:<br>
 `cp config.4.19 .config`
