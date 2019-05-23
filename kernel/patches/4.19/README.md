@@ -7,9 +7,9 @@ Following versions have been validated as "excellent":
 * 4.19.24 (passed 96 hours of torture test)
 * 4.19.25
 * 4.19.29
-* 4.19.33 (fastest as of now)
-* 4.19.34 (somewhat slower)
-* 4.19.44
+* 4.19.33
+* 4.19.34 (somewhat slower than 4.19.33)
+* 4.19.44 (by far best disk read/write speed due top ext4 fixes, fast SAMBA read, 7% slower SAMBA write than 4.9.33)
 
 Pre-4.19.19 versions are to be avoided for stability reasons. Versions post 4.19.24 are most likely fine.
 Last version validated: 4.19.44
@@ -118,11 +118,14 @@ Reboot, make sure your netconsole windows are ready and ... good luck:<br>
 
 ## Kernel 4.19.x performance ##
 With a 4.19.x customer kernel, standard 4K block size ext4 file system, Debian 8.11, page size of 16K, network MTU size of 4080, one can expect:
-* Sequential disk reads of 121MB/s (dd if=tst.dd of=/dev/null bs=4k count=256K)
-* Sequential disk writes of 120MB/s to 160MB/s (dd if=/dev/zero of=tst.dd bs=1M or 4K)
-* Samba read speed of 115 MB/s (1GB file read, Windows 10 64-bit)
-* Samba write speed of 82 MB/s (1GB file write, Windows 10 64-bit)
-* over 400 days of uptime as measured on a My Book Live NAS used in a muti-user production environment
+* Sequential disk reads of 121MB/s (dd if=tst.dd of=/dev/null bs=4k count=256K) on pre 4.19.44
+* Sequential disk reads of 161MB/s (dd if=tst.dd of=/dev/null bs=4k count=256K) on 4.19.44
+* Sequential disk writes of 120MB/s to 160MB/s (dd if=/dev/zero of=tst.dd bs=1M or 4K) on pre 4.19.44
+* Sequential disk writes of 154MB/s to 180MB/s (dd if=/dev/zero of=tst.dd bs=1M or 4K) on 4.19.44
+* Samba read speed of 111 to 115 MB/s (1GB file read, Windows 10 64-bit) 
+* Samba write speed of 82 MB/s (1GB file write, Windows 10 64-bit) on 4.9.33
+* Samba write speed of 77 MB/s (1GB file write, Windows 10 64-bit) on other versions
+* over 40 days of uptime as measured on a My Book Live NAS used in a muti-user production environment (4.19.24)
 
 ## Supportability ##
 Kernel 4.19 series are Long Term Support (LTS) releases and very recent, so a long support live is ahead of us.
