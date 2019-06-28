@@ -15,7 +15,31 @@ The compressed tar [__image__](https://drive.google.com/open?id=1eCr4pyYLKAHId2Q
 - u-boot tools
 - NetConsole enabled by default
 
-## How to install with ext2/ext3? ##
+## Deciding where to host /boot and / (the root filesystem) ##
+One of the challenges with the MBL is that the U-Boot version does not support booting from an ext4 file system.
+But, in modern times we would like to have the root partition / on ext4 because of performance, interity and security (journalling, patches, security etc.).   
+
+To boot properly, we must provide at least 3 files on one (or two) media that U-boot recognizes
+- /boot/apollo3g.dtb (the kernel device tree in compile/binary format) or /boot/apollo3g_duo.dtb (for MBL duo)
+- /boot/uImage (the kernel)
+- /boot/boot.scr (the U-Boot command file that tells U-Boot where to find the kernel and OS)
+
+The MBL version of U-Boot supports booting off:
+- ext2 file system on disk
+- ext3 file system on disk
+- NFS file server
+- TFTP/BOOTP server (e.g. an OpenWRT router with TFTPD enabled)
+- and a few others such as Squashfs, Cramfs, Jffs2, Reiserfs, Ubifs, Yaffs2, ...
+
+Hence the /boot folder of the Debian image with at least the 3 files mentioned must be on one of these file systems.
+This leaves us with two alternatives:
+- keep /boot and / together on a single filesystem
+  Typically that is an ext3 (or ext2) filesystem and we have the choice between re-using /dev/sda1 or /dev/sda2 from the original firmware, or simple merge them in a 4GB filesystem.  Also possible is to have a software mirror between sda1 and sda2 like in the original FW, as long as it's ext2 or ext3.  The only file that needs to be customized is /boot/boot.scr, which needs to tell U-Boot where to find the /boot files and what parameters it needs to pass on to the kernel
+- separate /boot from /
+  Typically that would be /dev/sda1 (in ext2/ext3 format) for /boot and /dev/sda2 for / (in ext4).
+  Alternatively, locate /boot (3 files minimum) on a TFTP server (e.g. your router) and have / on either sda1, sda2 or a merged 4GB filesystem (in ext4 format).  Again, /boot/boot/scr must be customized to point to the proper locations.
+  
+## How to install a combined /boot and / with ext2/ext3? ##
 
 Make sure you have a solid backup (use dd to take an image backup)<br>
 Read the debrick/unbrick guide posted [here](https://community.wd.com/t/guide-how-to-unbrick-a-totally-dead-mbl/56658/545) and download unbrick software (just in case)<br>
@@ -26,7 +50,7 @@ WARNING: THIS WILL ERASE ONE COPY OF THE ORIGINAL FW AND BREAK THE SOFTWARE RAID
 `
 mkfs.ext3 -m 1 /dev/sdb1 or (mkfs.ext2)`
 
-The second partition still should have the official MBL distro as it’s a software raid 1 copy
+The second partition still should have the official MBL distro as itâ€™s a software raid 1 copy
 mount the newly formatted partition
 `
 mkdir /mnt/mbl; mount /dev/sdb1 /mnt/mbl`
@@ -50,9 +74,9 @@ Personalize the installation:
 ```
 export hostname="myname"
 hostname $hostname
-echo “127.0.0.1 $hostname localhost” > /etc/hosts
-hostnamectl set-hostname “$hostname”
-echo “$hostname” > /etc/hostname # uneeded
+echo â€œ127.0.0.1 $hostname localhostâ€ > /etc/hosts
+hostnamectl set-hostname â€œ$hostnameâ€
+echo â€œ$hostnameâ€ > /etc/hostname # uneeded
 
 # clean up ssh
 rm /etc/ssh/ssh_host* _
@@ -101,4 +125,9 @@ Advantages of using an ext4-only configuration include:
 
 ## Installing your own, clean Debian 8 (Jessie) ##
 
-Martin Höfling was written a superb blog on this topic.  There is absolutely nothing I can add to improve on his very clear outline posted [here](https://www.schwabenlan.de/en/post/2015/04/clean-debian-install-on-mybook-live-nas/)
+Martin HÃ¶fling was written a superb blog on this topic.  There is absolutely nothing I can add to improve on his very clear outline posted [here](https://www.schwabenlan.de/en/post/2015/04/clean-debian-install-on-mybook-live-nas/)
+
+## Final step before booting ##
+The one file that needs modification is /boot/boot.scr
+You can find examples and a tool to compile this file in the uboot section.
+To simplify things I will post a couple of precompiled boot.scr files that correspond to the most popular scenarios
