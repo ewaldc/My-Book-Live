@@ -140,8 +140,8 @@ The installation follows a similar process as described above, except for:
 
 As above, before rebooting:
 - If you have a MBL Duo, ensure you have the proper device tree and copy /boot/apollo3g_duo.dtb to /boot/apollo3g.dtb
-- Copy the right U-Boot boot command file from the github to /boot/boot.scr
-  When using /dev/sda1 as /boot and /dev/sda2 as root, use __[this file](https://github.com/ewaldc/My-Book-Live/blob/master/uboot/boot_ext3_sda1/boot.scr)__
+- Copy the right U-Boot boot command file from the github to /boot/boot.scr<br>
+  When using /dev/sda1 as /boot and /dev/sda2 as root, use __[this file](https://github.com/ewaldc/My-Book-Live/blob/master/uboot/boot_ext3_sda1/boot.scr)__<br>
   When using /dev/sda2 as /boot and /dev/sda1 as root, use __[this file](https://github.com/ewaldc/My-Book-Live/blob/master/uboot/boot_ext3_sda2/boot.scr)__
 
 To use more advanced U-Boot options such as netconsole, auto-recovery kernels, mixed TFTP/disk booting and more, read the __[U-Boot section](https://github.com/ewaldc/My-Book-Live/tree/master/uboot)__
