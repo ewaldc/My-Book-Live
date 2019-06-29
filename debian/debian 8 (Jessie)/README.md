@@ -12,8 +12,8 @@ The compressed tar [__image__](https://drive.google.com/open?id=1eCr4pyYLKAHId2Q
 - SAMBA 4.x patched for performance
 - NFS 4.x enabled
 - 20+ Debian patches for powerpc not included in upstream Debian
-- u-boot tools
-- NetConsole enabled by default
+- U-Boot firmware tools
+- NetConsole (not enabled by default)
 
 ## Deciding where to host boot files and root filesystem ##
 One of the challenges with the MBL is that the U-Boot version does not support booting from an ext4 file system.
@@ -22,7 +22,7 @@ Yet, for performance, interity and security (journalling, patches, security etc.
 Hece, to allow for proper boot, we must provide at least 3 files on one (or two) media that U-boot supports
 - /boot/apollo3g.dtb (the kernel device tree in compile/binary format) (copied from /boot/apollo3g_duo.dtb for MBL duo)
 - /boot/uImage (the kernel)
-- /boot/boot.scr (the U-Boot command file that tells U-Boot where to find and how to start the kernel and OS)
+- /boot/boot.scr (the U-Boot command file that tells U-Boot where to find and how to start the kernel/OS)
 
 The MBL version of U-Boot supports booting off:
 - ext2 file system on disk
@@ -34,11 +34,11 @@ The MBL version of U-Boot supports booting off:
 So the /boot folder of the Debian image with at least the 3 files mentioned must be on one of these file systems.
 
 This leaves us with basically two alternatives:
-- keep /boot and / together on a single filesystem
-  Typically that is an ext3 filesystem (ext2 is also possible) and now we have the choice between re-using /dev/sda1 or /dev/sda2 from the original firmware, or get rid of both sda1/sd2 and create a new volume that is double the size (4GB) and format that to ext3 filesystem.  It is still possible to have a software mirror between sda1 and sda2 like in the original FW, as long as it's formatted in ext2 or ext3.  The only file that needs to be customized is /boot/boot.scr, which needs to tell U-Boot where to find the /boot files and what parameters it needs to pass on to the kernel
+- keep /boot and / together on a single filesystem.<br/>
+  Typically that is an ext3 filesystem (ext2 is also possible) and now we have the choice between re-using /dev/sda1 or /dev/sda2 from the original firmware, or get rid of both sda1/sd2 and create a new volume that is double the size (4GB) and format that to ext3 filesystem.  It is still possible to have a software mirror between sda1 and sda2 like in the original FW, as long as it's formatted in ext2 or ext3.  The only file that needs to be customized is /boot/boot.scr, which tells U-Boot where to find the /boot files and what parameters it needs to pass on to the kernel
 	
-- separate /boot from / in order to leverage ext4 for root file system
-  Option is to use /dev/sda1 (in ext2/ext3 format) for /boot and /dev/sda2 for / (in ext4).  Here you have the choice to leave sda1 and sda2 at their original 2GB sizes, or you might create a smaller (e.g. 16MB) ext3 file system for sda1 and a larger (4GB -16MB) file system for sda2.  Just make sure sda2 is ext4, so you might need to re-format using mkfs.
+- separate /boot from / in order to leverage ext4 for root file system.<br/>
+  One option is to use /dev/sda1 (in ext2/ext3 format) for /boot and /dev/sda2 for / (in ext4).  Here you have the choice to leave sda1 and sda2 at their original 2GB sizes, or you might create a smaller (e.g. 16MB) ext3 file system for sda1 and a larger (4GB -16MB) file system for sda2.  Just make sure sda2 is ext4, so you might need to re-format using mkfs.
 	Alternatively, put /boot (3 files minimum) on a TFTP server (e.g. your router) and have / on either sda1, sda2 or a merged 4GB filesystem (in ext4 format).  Again, /boot/boot/scr must be customized to point to the proper locations.
 
 Read more about advanced options for booting and U-Boot commands, including neconsole, auto-recovery kernels, mixed TFTP/disk booting and more in the __[U-Boot section](https://github.com/ewaldc/My-Book-Live/tree/master/uboot)__
