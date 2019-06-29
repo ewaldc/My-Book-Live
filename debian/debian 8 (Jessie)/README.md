@@ -41,7 +41,7 @@ This leaves us with basically two alternatives:
   One option is to use /dev/sda1 (in ext2/ext3 format) for /boot and /dev/sda2 for / (in ext4).  Here you have the choice to leave sda1 and sda2 at their original 2GB sizes, or you might create a smaller (e.g. 16MB) ext3 file system for sda1 and a larger (4GB -16MB) file system for sda2.  Just make sure sda2 is ext4, so you might need to re-format using mkfs.
 	Alternatively, put /boot (3 files minimum) on a TFTP server (e.g. your router) and have / on either sda1, sda2 or a merged 4GB filesystem (in ext4 format).  Again, /boot/boot/scr must be customized to point to the proper locations.
 
-Read more about advanced options for booting and U-Boot commands, including neconsole, auto-recovery kernels, mixed TFTP/disk booting and more in the __[U-Boot section](https://github.com/ewaldc/My-Book-Live/tree/master/uboot)__
+Read more about advanced options for booting and U-Boot commands, including netconsole, auto-recovery kernels, mixed TFTP/disk booting and more in the __[U-Boot section](https://github.com/ewaldc/My-Book-Live/tree/master/uboot)__
   
 ## How to install a combined /boot and / with ext2/ext3? ##
 
@@ -73,8 +73,8 @@ sync; umount /mnt/mbl`
 
 Before rebooting:
 - If you have a MBL Duo, ensure you have the proper device tree and copy /boot/apollo3g_duo.dtb to /boot/apollo3g.dtb
-- Copy the right U-Boot boot command file for the github to /boot/boot.scr
-  When using /dev/sda1 use __[this file](https://github.com/ewaldc/My-Book-Live/blob/master/uboot/boot_ext3_sda1/boot.scr)__
+- Copy the right U-Boot boot command file for the github to /boot/boot.scr<br>
+  When using /dev/sda1 use __[this file](https://github.com/ewaldc/My-Book-Live/blob/master/uboot/boot_ext3_sda1/boot.scr)__<br>
   When using /dev/sda2 use __[this file](https://github.com/ewaldc/My-Book-Live/blob/master/uboot/boot_ext3_sda2/boot.scr)__
 
 
@@ -133,7 +133,12 @@ Advantages of using an ext4-only configuration include:
 - better overall performance
 - better resiliency
 
-Before rebooting:
+The installation follows a similar process as described above, except for:
+- the need to have an ext3 file system for /boot and an ext4 filesystem for / (sda1/sda2 or reverse) unless you decide to boot off TFTP
+- install the Debian tar image to the root file system (ext4)
+- copy (or move) /boot to the ext3 file system
+
+As above, before rebooting:
 - If you have a MBL Duo, ensure you have the proper device tree and copy /boot/apollo3g_duo.dtb to /boot/apollo3g.dtb
 - Copy the right U-Boot boot command file from the github to /boot/boot.scr
   When using /dev/sda1 as /boot and /dev/sda2 as root, use __[this file](https://github.com/ewaldc/My-Book-Live/blob/master/uboot/boot_ext3_sda1/boot.scr)__
