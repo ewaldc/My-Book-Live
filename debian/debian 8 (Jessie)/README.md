@@ -121,6 +121,10 @@ NFS export is enabled, but you will need to modify exportfs.
 Your data partition should be untouched, it should be mounted on /DataVolume.
 In case you start with a new drive, I have optimized the kernel driver for solid performance on a regular 4K file system which is readable on any Linux server and much easier to backup. I posted some performance numbers earlier.
 
+NOTE: The Debian image will size the temporary filesystem /run/lock, which is heavily used by SAMBA, based on an algorithm that takes the amount of virtual memory (swap, RAM size, ...) into account (see /lib/init/tmpfs.sh).  Typically that ends up being ~5MB.  When copying many files (terabytes), you may notice that /run/lock runs full.  In that case, simply override this setting with an entry in /etc/fstab
+```
+tmpfs  /run/lock tmpfs defaults,,nosuid,nodev,noexec,relatime,size=**8M** 0 0
+```
 It is still possible to go back to original FW by modifying `/boot/boot.scr` to boot off /dev/sda2
 
 ## How to install with ext4 ? ##
