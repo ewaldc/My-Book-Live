@@ -2,7 +2,7 @@
 Kernel patches and Debian release for Western Digital My Book Live.</br>
 __NOTE__: these customizations will void your warranty and are delivered on best-effort only</br>
 __NOTE__: while the posted methods allow you to fully customize a MBL without ever opening it, you need to keep in mind that there might be a failure which requires you to ultimately open up the shell.</br> 
-__NOTE__: none of this work is tested on a My Book Live DUO for the simple reason that we don't own one. That said, community members have successfully deployed on MBL Duo.</br>
+__NOTE__: none of this work is tested on a My Book Live DUO for the simple reason that we don't own one. That said it, community members have successfully deployed on MBL Duo.</br>
   
 ## Why customize ? ##
 
@@ -28,14 +28,13 @@ Documentation is posted within each section.
 ## Latest validated kernel support ##
 * Kernel 2.6.32.71, released Sat, 12 Mar 2016<br>
 * Kernel 4.9.169, released Wed, 17 Apr 2019<br>
-* Kernel 4.19.44, released Fri, 17 May 2019
+* Kernel 4.19.96, released Tue, 14 Jan 2020
 
 
 ## What is new ? ##
 * __4.19 kernel (pre-compiled and patches) released__
-* high performance kernel 4.19.33 & 4.19.44 released
-* patches updated for 4.19.34 (slightly slower due to a few code changes)
-* patches updated for 4.19.44
+* high performance kernel 4.19.96 released
+* patches updated for 4.19.96
 * section on Samba
 * section on cross-compiling kernels
 * fixed a few Github postng issues

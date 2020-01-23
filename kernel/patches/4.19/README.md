@@ -1,18 +1,13 @@
 # My-Book-Live kernel 4.19.x
 
 ## Validated versions ##
-There is a reasonable chance these patches work with any 4.19.x version newer than 4.19.24.
+There is a reasonable chance these patches work with any 4.19.x version newer than 4.19.96.
 However, practical experience has shown that not every version is equally stable and/or performing.
-Following versions have been validated as "excellent":
-* 4.19.24 (passed 96 hours of torture test)
-* 4.19.25
-* 4.19.29
-* 4.19.33
-* 4.19.34 (somewhat slower than 4.19.33)
-* 4.19.44 (by far best disk read/write speed due top ext4 fixes, fast SAMBA read, 7% slower SAMBA write than 4.9.33)
+Since it's impossible to have a single patchset that works across the complete 4.19 series of kernels, the new baseline kernel becomes 4.19.96.
+For anyone wanting explore older (4.19.19 to 4.19.44) kernels, I posted a tar archive with the previous generation patches. 
 
-Pre-4.19.19 versions are to be avoided for stability reasons. Versions post 4.19.24 are most likely fine.
-Last version validated: 4.19.44
+Pre-4.19.19 versions are to be avoided for stability reasons. 
+Last version validated: __4.19.96__
 
 ## What's changed compared to 4.9.x ? ##
 The DesignWare (DW) DMA and SATA driver code have evolved to levels of performance that are close enough to the custom SATA DWC NCQ driver to discontinue it.  All the credit for this work goes to the OpenWRT team (chunkeey). However, there is plenty of room for further tuning of these drivers and some of the code of the SATA DWC NCQ driver will be integrated.  The OpenWRT team will be able to pick up this work if they desire so.
@@ -53,8 +48,8 @@ Download the 4.19 kernel of your choice:
 * download a version of your choice in compressed tar format (gz or xz, xz preferred as it is the smaller size): https://mirrors.edge.kernel.org/pub/linux/kernel/v4.x/
 
 Uncompress the kernel:
-* in .gz format: `tar -xzf linux-4.19.24.tar.gz`
-* in .xz format: `tar -xJf linux-4.19.24.tar.xz`
+* in .gz format: `tar -xzf linux-4.19.96.tar.gz`
+* in .xz format: `tar -xJf linux-4.19.96.tar.xz`
 
 Change active directory: `cd linux-4.19.24`<br>
 Optionaly, save some disk space by deleting uneeded architectures:
@@ -76,8 +71,8 @@ done
 ```
 
 Watch for any failed patches. Please accept my apologies if you hit an error and submit an issue...
-You will find that patch `702-phy_add_aneg_done_function.patch` has one failed hunk, which is due to the fact that the code changed for 4.19.34. 
-Linux kernel 4.19.44 requires a different `201-extra_optimization.patch`.  The easiest solution is to leverage `patches_4.19.44.7z` which contains all relevant patches. 
+You will find that patch `702-phy_add_aneg_done_function.patch` has one failed hunk, which is due to the fact that the code changed after 4.19.34.
+
 
 Copy one of the sample config files from [here](https://github.com/ewaldc/My-Book-Live/tree/master/kernel/patches/4.19/config) and duplicate as .config. Alternative build your own config file using `make menuconfig`:<br>
 `cp config.4.19 .config`
@@ -118,14 +113,11 @@ Reboot, make sure your netconsole windows are ready and ... good luck:<br>
 
 ## Kernel 4.19.x performance ##
 With a 4.19.x customer kernel, standard 4K block size ext4 file system, Debian 8.11, page size of 16K, network MTU size of 4080, one can expect:
-* Sequential disk reads of 121MB/s (dd if=tst.dd of=/dev/null bs=4k count=256K) on pre 4.19.44
-* Sequential disk reads of 161MB/s (dd if=tst.dd of=/dev/null bs=4k count=256K) on 4.19.44
-* Sequential disk writes of 120MB/s to 160MB/s (dd if=/dev/zero of=tst.dd bs=1M or 4K) on pre 4.19.44
-* Sequential disk writes of 154MB/s to 180MB/s (dd if=/dev/zero of=tst.dd bs=1M or 4K) on 4.19.44
-* Samba read speed of 111 to 115 MB/s (1GB file read, Windows 10 64-bit) 
-* Samba write speed of 82 MB/s (1GB file write, Windows 10 64-bit) on 4.9.33
-* Samba write speed of 77 MB/s (1GB file write, Windows 10 64-bit) on other versions
-* over 40 days of uptime as measured on a My Book Live NAS used in a muti-user production environment (4.19.24)
+* Sequential disk reads of 150MB/s to 178MB/s (dd if=tst.dd of=/dev/null bs=4k count=256K) on 4.19.96
+* Sequential disk writes of 154MB/s to 188MB/s (dd if=/dev/zero of=tst.dd bs=1M or 4K) on 4.19.96
+* Samba read speed of 111 to 120 MB/s (1GB file read, Windows 10 64-bit) 
+* Samba write speed of up to 75 MB/s (1GB file write, Windows 10 64-bit) on other versions
+* over 20 days of uptime as measured on a My Book Live NAS used in a muti-user production environment (4.19.96)
 
 ## Supportability ##
 Kernel 4.19 series are Long Term Support (LTS) releases and very recent, so a long support live is ahead of us.

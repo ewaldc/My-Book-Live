@@ -1394,12 +1394,12 @@
  	struct emac_instance *dev = netdev_priv(ndev);
  
  	DBG(dev, "close" NL);
-@@ -1394,35 +1239,43 @@
+@@ -1394,35 +1239,42 @@
  	free_irq(dev->emac_irq, dev);
  
  	netif_carrier_off(ndev);
+-
 +	if (dev->wol_irq != NO_IRQ) free_irq(dev->wol_irq, dev);
- 
  	return 0;
  }
  
@@ -1408,9 +1408,10 @@
 -{
 -	if (emac_has_feature(dev, EMAC_FTR_HAS_TAH) &&
 -		(skb->ip_summed == CHECKSUM_PARTIAL)) {
+-		++dev->stats.tx_packets_csum;
 +static __always_inline u16 emac_tx_csum(struct emac_instance *dev, struct sk_buff *skb) {
 +	if (likely(skb->ip_summed == CHECKSUM_PARTIAL)) {
- 		++dev->stats.tx_packets_csum;
++ 		++dev->stats.tx_packets_csum;
 +
 +#if defined(CONFIG_IBM_EMAC_TAH) && defined(EMAC_HW_TSO)  //ECO
 +#define SKB_GSO_TYPE(skb)	(skb_shinfo(skb)->gso_type)
@@ -1431,7 +1432,7 @@
  	return 0;
  }
  
--static inline int emac_xmit_finish(struct emac_instance *dev, int len)
+-static inline netdev_tx_t emac_xmit_finish(struct emac_instance *dev, int len)
 -{
 -	struct emac_regs __iomem *p = dev->emacp;
 -	struct net_device *ndev = dev->ndev;
@@ -1446,7 +1447,7 @@
 -	else
 -		out_be32(&p->tmr0, EMAC_TMR0_XMIT);
 -
-+	 * difference, then we can store the TMR0 value in "dev" instead */
++	* difference, then we can store the TMR0 value in "dev" instead */
 +#ifdef CONFIG_IBM_EMAC_EMAC4	
 +    out_be32(dev->tmr0, EMAC4_TMR0_XMIT);
 +#else
@@ -1455,11 +1456,11 @@
  	if (unlikely(++dev->tx_cnt == NUM_TX_BUFF)) {
  		netif_stop_queue(ndev);
  		DBG2(dev, "stopped TX queue" NL);
-@@ -1436,113 +1289,106 @@
+@@ -1436,114 +1288,108 @@
  }
  
  /* Tx lock BH */
--static int emac_start_xmit(struct sk_buff *skb, struct net_device *ndev)
+-static netdev_tx_t emac_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 -{
 -	struct emac_instance *dev = netdev_priv(ndev);
 -	unsigned int len = skb->len;
@@ -1476,6 +1477,11 @@
 -
 -	DBG2(dev, "xmit(%u) %d" NL, len, slot);
 -
+-	dev->tx_skb[slot] = skb;
+-	dev->tx_desc[slot].data_ptr = dma_map_single(&dev->ofdev->dev,
+-						     skb->data, len,
+-						     DMA_TO_DEVICE);
+-	dev->tx_desc[slot].data_len = (u16) len;
 +static __always_inline int _emac_start_xmit(struct sk_buff *skb, register struct emac_instance *dev, unsigned int len) {
 +	register int slot = dev->tx_slot;
 +    register struct mal_descriptor *desc = &dev->tx_desc[slot];
@@ -1491,16 +1497,12 @@
 +    dev->tx_slot = NXT_TX_SLOT(slot);
 +	if (unlikely(slot == NUM_TX_BUFF - 1)) ctrl |= MAL_TX_CTRL_WRAP;  // set WRAP on last slot
 +	DBG2(dev, "xmit(%u) %d\n" NL, len, slot);
- 	dev->tx_skb[slot] = skb;
--	dev->tx_desc[slot].data_ptr = dma_map_single(&dev->ofdev->dev,
--						     skb->data, len,
--						     DMA_TO_DEVICE);
--	dev->tx_desc[slot].data_len = (u16) len;
-+    desc->data_ptr = dma_map_single(dev->ofdev_dev, skb->data, len, DMA_TO_DEVICE);
++ 	dev->tx_skb[slot] = skb;
++	desc->data_ptr = dma_map_single(dev->ofdev_dev, skb->data, len, DMA_TO_DEVICE);
 +    desc->data_len = (u16) len;
  	wmb();
 -	dev->tx_desc[slot].ctrl = ctrl;
-+    desc->ctrl = ctrl;
++	desc->ctrl = ctrl;
  
 -	return emac_xmit_finish(dev, len);
 +	return emac_xmit_finish(dev, dev->ndev, len);
@@ -1538,7 +1540,7 @@
 -		dev->tx_desc[slot].data_ptr = pd;
 -		dev->tx_desc[slot].data_len = (u16) chunk;
 -		dev->tx_desc[slot].ctrl = ctrl;
-+        desc = &dev->tx_desc[slot];
++		desc = &dev->tx_desc[slot];
 +		desc->data_ptr = pd;
 +		desc->data_len = (u16) chunk;
 +		desc->ctrl = ctrl;
@@ -1554,7 +1556,8 @@
  }
  
  /* Tx lock BH disabled (SG version for TAH equipped EMACs) */
--static int emac_start_xmit_sg(struct sk_buff *skb, struct net_device *ndev)
+-static netdev_tx_t
+-emac_start_xmit_sg(struct sk_buff *skb, struct net_device *ndev)
 -{
 -	struct emac_instance *dev = netdev_priv(ndev);
 -	int nr_frags = skb_shinfo(skb)->nr_frags;
@@ -1562,7 +1565,7 @@
 -	int slot, i;
 -	u16 ctrl;
 +/* Transmit the packet using specified transmit queue */
-+static int emac_start_xmit_sg(struct sk_buff *skb, struct net_device *ndev) {
++static netdev_tx_t emac_start_xmit_sg(struct sk_buff *skb, struct net_device *ndev) {
 +    register struct emac_instance *dev = netdev_priv(ndev);
 + 	int nr_frags = skb_shinfo(skb)->nr_frags;
 +	register unsigned int len = skb->len;
@@ -1615,13 +1618,13 @@
 -	if (unlikely(len))
 -		slot = emac_xmit_split(dev, slot, pd + chunk, len, !nr_frags,
 -				       ctrl);
--	/* skb fragments */
 +	if (unlikely(len)) slot = emac_xmit_split(dev, slot, pd + chunk, len, !nr_frags, ctrl);
-+    /* skb fragments */
++	
+ 	/* skb fragments */
  	for (i = 0; i < nr_frags; ++i) {
  		struct skb_frag_struct *frag = &skb_shinfo(skb)->frags[i];
  		len = skb_frag_size(frag);
--
+ 
 -		if (unlikely(dev->tx_cnt + mal_tx_chunks(len) >= NUM_TX_BUFF))
 -			goto undo_frame;
 -
@@ -1636,7 +1639,7 @@
  	}
  
  	DBG2(dev, "xmit_sg(%u) %d - %d" NL, skb->len, dev->tx_slot, slot);
-@@ -1551,23 +1397,19 @@
+@@ -1552,23 +1398,19 @@
  	dev->tx_skb[slot] = skb;
  
  	/* Send the packet out */
@@ -1667,7 +1670,7 @@
  	}
  	++dev->estats.tx_undo;
  
-@@ -1577,240 +1419,239 @@
+@@ -1578,240 +1420,239 @@
  	return NETDEV_TX_BUSY;
  }
  
@@ -2041,7 +2044,7 @@
  
  			ctrl &= EMAC_BAD_RX_MASK;
  			if (unlikely(ctrl && ctrl != EMAC_RX_TAH_BAD_CSUM)) {
-@@ -1818,15 +1659,14 @@
+@@ -1819,15 +1660,14 @@
  				++dev->estats.rx_dropped_error;
  				dev_kfree_skb(skb);
  				len = 0;
@@ -2059,7 +2062,7 @@
  		goto next;
  	}
  
-@@ -1859,47 +1699,36 @@
+@@ -1860,47 +1700,36 @@
  }
  
  /* NAPI poll context */
@@ -2120,7 +2123,7 @@
  	struct emac_regs __iomem *p = dev->emacp;
  	struct emac_error_stats *st = &dev->estats;
  	u32 isr;
-@@ -1911,44 +1740,30 @@
+@@ -1912,44 +1741,30 @@
  
  	DBG(dev, "isr = %08x" NL, isr);
  
@@ -2184,7 +2187,7 @@
  	struct emac_instance *dev = netdev_priv(ndev);
  	struct emac_stats *st = &dev->stats;
  	struct emac_error_stats *est = &dev->estats;
-@@ -1963,61 +1778,48 @@
+@@ -1964,61 +1779,48 @@
  	nst->rx_bytes = (unsigned long)st->rx_bytes;
  	nst->tx_packets = (unsigned long)st->tx_packets;
  	nst->tx_bytes = (unsigned long)st->tx_bytes;
@@ -2262,7 +2265,7 @@
  	struct emac_instance *dev = netdev_priv(ndev);
  	u32 supported, advertising;
  
-@@ -2032,84 +1834,54 @@
+@@ -2033,84 +1835,54 @@
  	cmd->base.duplex = dev->phy.duplex;
  	mutex_unlock(&dev->link_lock);
  
@@ -2368,7 +2371,7 @@
  		mutex_unlock(&dev->link_lock);
  	}
  	emac_force_link_update(dev);
-@@ -2117,16 +1889,12 @@
+@@ -2118,16 +1890,12 @@
  	return 0;
  }
  
@@ -2387,7 +2390,7 @@
  	struct emac_instance *dev = netdev_priv(ndev);
  
  	mutex_lock(&dev->link_lock);
-@@ -2135,56 +1903,41 @@
+@@ -2136,56 +1904,41 @@
  		pp->autoneg = 1;
  
  	if (dev->phy.duplex == DUPLEX_FULL) {
@@ -2458,7 +2461,7 @@
  	struct emac_instance *dev = netdev_priv(ndev);
  	struct emac_ethtool_regs_hdr *hdr = buf;
  
-@@ -2207,15 +1960,12 @@
+@@ -2208,15 +1961,12 @@
  	}
  }
  
@@ -2476,7 +2479,7 @@
  
  	mutex_lock(&dev->link_lock);
  	if (!dev->phy.autoneg) {
-@@ -2230,25 +1980,17 @@
+@@ -2231,25 +1981,17 @@
  	return res;
  }
  
@@ -2508,7 +2511,7 @@
  	struct emac_instance *dev = netdev_priv(ndev);
  
  	memcpy(tmp_stats, &dev->stats, sizeof(dev->stats));
-@@ -2256,9 +1998,7 @@
+@@ -2257,9 +1999,7 @@
  	memcpy(tmp_stats, &dev->estats, sizeof(dev->estats));
  }
  
@@ -2519,7 +2522,7 @@
  	struct emac_instance *dev = netdev_priv(ndev);
  
  	strlcpy(info->driver, "ibm_emac", sizeof(info->driver));
-@@ -2267,6 +2007,34 @@
+@@ -2268,6 +2008,34 @@
  		 dev->cell_index, dev->ofdev->dev.of_node);
  }
  
@@ -2554,7 +2557,7 @@
  static const struct ethtool_ops emac_ethtool_ops = {
  	.get_drvinfo = emac_ethtool_get_drvinfo,
  
-@@ -2285,33 +2053,225 @@
+@@ -2286,33 +2054,225 @@
  	.get_link = ethtool_op_get_link,
  	.get_link_ksettings = emac_ethtool_get_link_ksettings,
  	.set_link_ksettings = emac_ethtool_set_link_ksettings,
@@ -2797,7 +2800,7 @@
  	}
  }
  
-@@ -2330,9 +2290,7 @@
+@@ -2331,9 +2291,7 @@
  #define	EMAC_DEP_PREV_IDX	5
  #define	EMAC_DEP_COUNT		6
  
@@ -2808,7 +2811,7 @@
  	int i, there = 0;
  	struct device_node *np;
  
-@@ -2350,27 +2308,19 @@
+@@ -2351,27 +2309,19 @@
  				there++;
  				continue;
  			}
@@ -2845,7 +2848,7 @@
  	of_dev_put(dev->mal_dev);
  	of_dev_put(dev->zmii_dev);
  	of_dev_put(dev->rgmii_dev);
-@@ -2378,12 +2328,9 @@
+@@ -2379,12 +2329,9 @@
  	of_dev_put(dev->tah_dev);
  }
  
@@ -2860,7 +2863,7 @@
  	return 0;
  }
  
-@@ -2391,8 +2338,7 @@
+@@ -2392,8 +2339,7 @@
  	.notifier_call = emac_of_bus_notify
  };
  
@@ -2870,7 +2873,7 @@
  	struct emac_depentry deps[EMAC_DEP_COUNT];
  	int i, err;
  
-@@ -2401,22 +2347,16 @@
+@@ -2402,22 +2348,16 @@
  	deps[EMAC_DEP_MAL_IDX].phandle = dev->mal_ph;
  	deps[EMAC_DEP_ZMII_IDX].phandle = dev->zmii_ph;
  	deps[EMAC_DEP_RGMII_IDX].phandle = dev->rgmii_ph;
@@ -2898,7 +2901,7 @@
  	}
  	if (err == 0) {
  		dev->mal_dev = deps[EMAC_DEP_MAL_IDX].ofdev;
-@@ -2429,23 +2369,18 @@
+@@ -2430,23 +2370,18 @@
  	return err;
  }
  
@@ -2925,7 +2928,7 @@
  	struct emac_instance *dev = netdev_priv(ndev);
  	struct phy_device *phy = dev->phy_dev;
  
-@@ -2457,8 +2392,7 @@
+@@ -2458,8 +2393,7 @@
  	dev->phy.advertising = phy->advertising;
  }
  
@@ -2935,7 +2938,7 @@
  	int ret = emac_mdio_read(bus->priv, addr, regnum);
  	/* This is a workaround for powered down ports/phys.
  	 * In the wild, this was seen on the Cisco Meraki MX60(W).
-@@ -2469,23 +2403,18 @@
+@@ -2470,23 +2404,18 @@
  	return ret < 0 ? 0xffff : ret;
  }
  
@@ -2962,7 +2965,7 @@
  	phy_dev->autoneg = phy->autoneg;
  	phy_dev->speed = phy->speed;
  	phy_dev->duplex = phy->duplex;
-@@ -2503,8 +2432,7 @@
+@@ -2504,8 +2433,7 @@
  	return emac_mdio_phy_start_aneg(phy, dev->phy_dev);
  }
  
@@ -2972,7 +2975,7 @@
  	struct net_device *ndev = phy->dev;
  	struct emac_instance *dev = netdev_priv(ndev);
  
-@@ -2514,13 +2442,10 @@
+@@ -2515,13 +2443,10 @@
  	return emac_mdio_phy_start_aneg(phy, dev->phy_dev);
  }
  
@@ -2988,7 +2991,7 @@
  	if (res) {
  		dev_err(&dev->ofdev->dev, "link update failed (%d).", res);
  		return ethtool_op_get_link(ndev);
-@@ -2529,16 +2454,12 @@
+@@ -2530,16 +2455,12 @@
  	return dev->phy_dev->link;
  }
  
@@ -3008,7 +3011,7 @@
  
  	phy->speed = phy_dev->speed;
  	phy->duplex = phy_dev->duplex;
-@@ -2547,8 +2468,7 @@
+@@ -2548,8 +2469,7 @@
  	return 0;
  }
  
@@ -3018,7 +3021,7 @@
  	struct net_device *ndev = phy->dev;
  	struct emac_instance *dev = netdev_priv(ndev);
  
-@@ -2564,8 +2484,7 @@
+@@ -2565,8 +2485,7 @@
  	.read_link	= emac_mdio_read_link,
  };
  
@@ -3028,7 +3031,7 @@
  	struct device_node *mii_np;
  	int res;
  
-@@ -2594,26 +2513,18 @@
+@@ -2595,26 +2514,18 @@
  	dev->mii_bus->reset = &emac_mii_bus_reset;
  	snprintf(dev->mii_bus->id, MII_BUS_ID_SIZE, "%s", dev->ofdev->name);
  	res = of_mdiobus_register(dev->mii_bus, mii_np);
@@ -3060,7 +3063,7 @@
  	if (!dev->phy_dev) {
  		dev_err(&dev->ofdev->dev, "failed to connect to PHY.\n");
  		return -ENODEV;
-@@ -2629,20 +2540,16 @@
+@@ -2630,20 +2541,16 @@
  	return 0;
  }
  
@@ -3085,7 +3088,7 @@
  		}
  	}
  
-@@ -2650,8 +2557,7 @@
+@@ -2651,8 +2558,7 @@
  	return res;
  }
  
@@ -3095,7 +3098,7 @@
  	struct device_node *np = dev->ofdev->dev.of_node;
  	struct net_device *ndev = dev->ndev;
  	u32 phy_map, adv;
-@@ -2661,24 +2567,20 @@
+@@ -2662,24 +2568,20 @@
  	dev->phy.mode = dev->phy_mode;
  
  	/* PHY-less configuration. */
@@ -3126,7 +3129,7 @@
  
  			res = of_phy_register_fixed_link(np);
  			dev->phy_dev = of_phy_find_device(np);
-@@ -2717,46 +2619,26 @@
+@@ -2718,46 +2620,26 @@
  	 * This is needed mostly for 440GX
  	 */
  	if (emac_phy_gpcs(dev->phy.mode)) {
@@ -3181,7 +3184,7 @@
  
  	for (i = 0; i < 0x20; phy_map >>= 1, ++i)
  		if (!(phy_map & 1)) {
-@@ -2765,10 +2647,8 @@
+@@ -2766,10 +2648,8 @@
  
  			/* Quick check if there is a PHY at the address */
  			r = emac_mdio_read(dev->ndev, i, MII_BMCR);
@@ -3194,7 +3197,7 @@
  		}
  
  	/* Enable external clock source */
-@@ -2806,15 +2686,12 @@
+@@ -2807,15 +2687,12 @@
  		if (f & SUPPORTED_1000baseT_Full) {
  			speed = SPEED_1000;
  			fd = DUPLEX_FULL;
@@ -3213,7 +3216,7 @@
  
  		/* Force link parameters */
  		dev->phy.def->ops->setup_forced(&dev->phy, speed, fd);
-@@ -2822,83 +2699,60 @@
+@@ -2823,83 +2700,60 @@
  	return 0;
  }
  
@@ -3331,7 +3334,7 @@
  			dev->features |= EMAC_FTR_440EP_PHY_CLK_FIX;
  		if (of_device_is_compatible(np, "ibm,emac-405ez")) {
  #ifdef CONFIG_IBM_EMAC_NO_FLOW_CTRL
-@@ -2909,7 +2763,6 @@
+@@ -2910,7 +2764,6 @@
  			return -ENXIO;
  #endif
  		}
@@ -3339,7 +3342,7 @@
  	}
  
  	/* Fixup some feature bits based on the device tree */
-@@ -2920,8 +2773,7 @@
+@@ -2921,8 +2774,7 @@
  
  	/* CAB lacks the appropriate properties */
  	if (of_device_is_compatible(np, "ibm,emac-axon"))
@@ -3349,7 +3352,7 @@
  
  	/* Enable TAH/ZMII/RGMII features as found */
  	if (dev->tah_ph != 0) {
-@@ -2954,8 +2806,7 @@
+@@ -2955,8 +2807,7 @@
  	/* Read MAC-address */
  	p = of_get_property(np, "local-mac-address", NULL);
  	if (p == NULL) {
@@ -3359,7 +3362,7 @@
  		return -ENXIO;
  	}
  	memcpy(dev->ndev->dev_addr, p, ETH_ALEN);
-@@ -2968,6 +2819,9 @@
+@@ -2969,6 +2820,9 @@
  		dev->xaht_slots_shift = EMAC4_XAHT_SLOTS_SHIFT;
  		dev->xaht_width_shift = EMAC4_XAHT_WIDTH_SHIFT;
  	}
@@ -3369,7 +3372,7 @@
  
  	DBG(dev, "features     : 0x%08x / 0x%08x\n", dev->features, EMAC_FTRS_POSSIBLE);
  	DBG(dev, "tx_fifo_size : %d (%d gige)\n", dev->tx_fifo_size, dev->tx_fifo_size_gige);
-@@ -2978,6 +2832,9 @@
+@@ -2979,6 +2833,9 @@
  	return 0;
  }
  
@@ -3379,7 +3382,7 @@
  static const struct net_device_ops emac_netdev_ops = {
  	.ndo_open		= emac_open,
  	.ndo_stop		= emac_close,
-@@ -2988,6 +2845,9 @@
+@@ -2989,6 +2846,9 @@
  	.ndo_validate_addr	= eth_validate_addr,
  	.ndo_set_mac_address	= emac_set_mac_address,
  	.ndo_start_xmit		= emac_start_xmit,
@@ -3389,7 +3392,7 @@
  };
  
  static const struct net_device_ops emac_gige_netdev_ops = {
-@@ -3001,40 +2861,57 @@
+@@ -3002,40 +2862,57 @@
  	.ndo_set_mac_address	= emac_set_mac_address,
  	.ndo_start_xmit		= emac_start_xmit_sg,
  	.ndo_change_mtu		= emac_change_mtu,
@@ -3461,7 +3464,7 @@
  	/* Initialize some embedded data structures */
  	mutex_init(&dev->mdio_lock);
  	mutex_init(&dev->link_lock);
-@@ -3043,8 +2920,7 @@
+@@ -3044,8 +2921,7 @@
  
  	/* Init various config data based on device-tree */
  	err = emac_init_config(dev);
@@ -3471,7 +3474,7 @@
  
  	/* Get interrupts. EMAC irq is mandatory, WOL irq is optional */
  	dev->emac_irq = irq_of_parse_and_map(np, 0);
-@@ -3057,8 +2933,12 @@
+@@ -3058,8 +2934,12 @@
  	ndev->irq = dev->emac_irq;
  
  	/* Map EMAC regs */
@@ -3486,7 +3489,7 @@
  	if (dev->emacp == NULL) {
  		printk(KERN_ERR "%pOF: Can't map device registers!\n", np);
  		err = -ENOMEM;
-@@ -3068,14 +2948,12 @@
+@@ -3069,14 +2949,12 @@
  	/* Wait for dependent devices */
  	err = emac_wait_deps(dev);
  	if (err) {
@@ -3503,7 +3506,7 @@
  
  	/* Register with MAL */
  	dev->commac.ops = &emac_commac_ops;
-@@ -3084,18 +2962,15 @@
+@@ -3085,18 +2963,15 @@
  	dev->commac.rx_chan_mask = MAL_CHAN_MASK(dev->mal_rx_chan);
  	err = mal_register_commac(dev->mal, &dev->commac);
  	if (err) {
@@ -3525,7 +3528,7 @@
  
  	DBG(dev, "tx_desc %p" NL, dev->tx_desc);
  	DBG(dev, "rx_desc %p" NL, dev->rx_desc);
-@@ -3105,7 +2980,9 @@
+@@ -3106,7 +2981,9 @@
  	memset(dev->rx_desc, 0, NUM_RX_BUFF * sizeof(struct mal_descriptor));
  	memset(dev->tx_skb, 0, NUM_TX_BUFF * sizeof(struct sk_buff *));
  	memset(dev->rx_skb, 0, NUM_RX_BUFF * sizeof(struct sk_buff *));
@@ -3536,7 +3539,7 @@
  	/* Attach to ZMII, if needed */
  	if (emac_has_feature(dev, EMAC_FTR_HAS_ZMII) &&
  	    (err = zmii_attach(dev->zmii_dev, dev->zmii_port, &dev->phy_mode)) != 0)
-@@ -3130,76 +3007,82 @@
+@@ -3131,76 +3008,82 @@
  	INIT_DELAYED_WORK(&dev->link_work, emac_link_timer);
  
  	/* Some SoCs like APM821xx does not support Half Duplex mode. */
@@ -3650,7 +3653,7 @@
   err_unreg_commac:
  	mal_unregister_commac(dev->mal, &dev->commac);
   err_rel_deps:
-@@ -3207,17 +3090,13 @@
+@@ -3208,17 +3091,13 @@
   err_reg_unmap:
  	iounmap(dev->emacp);
   err_irq_unmap:
@@ -3671,7 +3674,7 @@
  	if (blist) {
  		*blist = NULL;
  		wake_up_all(&emac_probe_wait);
-@@ -3225,29 +3104,22 @@
+@@ -3226,29 +3105,22 @@
  	return err;
  }
  
@@ -3710,7 +3713,7 @@
  	busy_phy_map &= ~(1 << dev->phy.address);
  	DBG(dev, "busy_phy_map now %#x" NL, busy_phy_map);
  
-@@ -3256,31 +3128,21 @@
+@@ -3257,31 +3129,21 @@
  
  	iounmap(dev->emacp);
  
@@ -3751,7 +3754,7 @@
  	{},
  };
  MODULE_DEVICE_TABLE(of, emac_match);
-@@ -3294,8 +3156,7 @@
+@@ -3295,8 +3157,7 @@
  	.remove = emac_remove,
  };
  
@@ -3761,7 +3764,7 @@
  	struct device_node *np = NULL;
  	int j, max, i = 0;
  	int cell_indices[EMAC_BOOT_LIST_SIZE];
-@@ -3304,13 +3165,10 @@
+@@ -3305,13 +3166,10 @@
  	while((np = of_find_all_nodes(np)) != NULL) {
  		const u32 *idx;
  
@@ -3778,7 +3781,7 @@
  		cell_indices[i] = *idx;
  		emac_boot_list[i++] = of_node_get(np);
  		if (i >= EMAC_BOOT_LIST_SIZE) {
-@@ -3330,32 +3188,23 @@
+@@ -3331,32 +3189,23 @@
  		}
  }
  
@@ -3818,7 +3821,7 @@
  	return 0;
  
   err_tah:
-@@ -3370,21 +3219,19 @@
+@@ -3371,21 +3220,19 @@
  	return rc;
  }
  
