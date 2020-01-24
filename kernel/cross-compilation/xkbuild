@@ -5,7 +5,7 @@
 
 #For openwrt - customize
 export STAGING_DIR="/mnt/addon/openwrt-master/openwrt/staging_dir"
-export PREFIX="${STAGING_DIR}/toolchain-powerpc_464fp_gcc-7.4.0_musl"
+export PREFIX="${STAGING_DIR}/toolchain-powerpc_464fp_gcc-8.3.0_musl"
 export PATH="${PREFIX}/bin:${PATH}"
 export ARCH=powerpc 
 export CROSS_COMPILE=powerpc-openwrt-linux-musl-
@@ -19,8 +19,10 @@ KERNEL_VERSION="$(echo $PWD|cut -d"-" -f 2)+x"
 #  echo "Adding x suffix to CONFIG_LOCALVERSION"
 #  sed -i "/CONFIG_LOCALVERSION/s/\"\(.*\)\"/\"\1x\"/" .config
 #fi
+
+#Make usre you have a .config file
 #make menuconfig
-make ARCH=powerpc CROSS_COMPILE=powerpc-openwrt-linux-musl- -j 4 V=sc uImage modules
+make ARCH=powerpc CROSS_COMPILE=powerpc-openwrt-linux-musl- -j $(nproc) V=sc uImage modules
 
 # The following section copies the generated kernel back to the MBL
 cp arch/$ARCH/boot/uImage .
@@ -28,7 +30,7 @@ ssh root@${MyBookLive} mount /dev/sda1 /mnt
 scp uImage root@${MyBookLive}:/mnt/boot/uImage_$KERNEL_VERSION
 ssh root@${MyBookLive} "cd /mnt/boot; rm uImage; ln uImage_$KERNEL_VERSION uImage; ls -la; umount /dev/sda1"
 
-make ARCH=powerpc CROSS_COMPILE=powerpc-openwrt-linux-musl- -j 4 V=sc modules_install INSTALL_MOD_PATH=$PWD
+make ARCH=powerpc CROSS_COMPILE=powerpc-openwrt-linux-musl- -j $(nproc) V=sc modules_install INSTALL_MOD_PATH=$PWD
 ls lib/modules
 cd lib/modules
 tar cf - * |ssh root@${MyBookLive} "(cd /lib/modules; tar xf -; chown -R root:root *)"
