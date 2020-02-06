@@ -28,13 +28,13 @@ Documentation is posted within each section.
 ## Latest validated kernel support ##
 * Kernel 2.6.32.71, released Sat, 12 Mar 2016<br>
 * Kernel 4.9.169, released Wed, 17 Apr 2019<br>
-* Kernel 4.19.96, released Tue, 14 Jan 2020
+* Kernel 4.19.99, released Mon, 27 Jan 2020
 
 
 ## What is new ? ##
 * __4.19 kernel (pre-compiled and patches) released__
-* high performance kernel 4.19.96 released
-* patches updated for 4.19.96
+* high performance kernel 4.19.99 released
+* patches updated for 4.19.99
 * section on Samba
 * section on cross-compiling kernels
 * fixed a few Github postng issues
