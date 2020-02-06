@@ -15,16 +15,6 @@
  
 --- a/drivers/net/phy/phy_device.c
 +++ b/drivers/net/phy/phy_device.c
-@@ -1506,6 +1506,9 @@ int genphy_update_link(struct phy_device
- {
- 	int status;
- 
-+	if (phydev->drv && phydev->drv->update_link)
-+		return phydev->drv->update_link(phydev);
-+
- 	/* Do a fake read */
- 	status = phy_read(phydev, MII_BMSR);
- 	if (status < 0)
 @@ -1502,6 +1502,9 @@
  {
  	int status;

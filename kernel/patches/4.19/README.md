@@ -1,13 +1,13 @@
 # My-Book-Live kernel 4.19.x
 
 ## Validated versions ##
-There is a reasonable chance these patches work with any 4.19.x version newer than 4.19.96.
+There is a reasonable chance these patches work with any 4.19.x version newer than 4.19.99.
 However, practical experience has shown that not every version is equally stable and/or performing.
-Since it's impossible to have a single patchset that works across the complete 4.19 series of kernels, the new baseline kernel becomes 4.19.96.
+Since it's impossible to have a single patchset that works across the complete 4.19 series of kernels, the new baseline kernel becomes 4.19.99.
 For anyone wanting explore older (4.19.19 to 4.19.44) kernels, I posted a tar archive with the previous generation patches. 
 
 Pre-4.19.19 versions are to be avoided for stability reasons. 
-Last version validated: __4.19.96__
+Last version validated: __4.19.99__
 
 ## What's changed compared to 4.9.x ? ##
 The DesignWare (DW) DMA and SATA driver code have evolved to levels of performance that are close enough to the custom SATA DWC NCQ driver to discontinue it.  All the credit for this work goes to the OpenWRT team (chunkeey). However, there is plenty of room for further tuning of these drivers and some of the code of the SATA DWC NCQ driver will be integrated.  The OpenWRT team will be able to pick up this work if they desire so.
@@ -43,15 +43,15 @@ If you are using Windows, make sure you have tools to log into the My Book Live 
 My favorites are [kitty](http://www.9bis.net/kitty/) (a portable fork of putty which auto-reconnects after a reboot) and [WinSCP](https://winscp.net/eng/download.php)
  
 Download the 4.19 kernel of your choice:
-* using github: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git.  For example clone https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/tree/?h=v4.19.24
+* using github: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git.  For example clone https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/tree/?h=v4.19.99
 * download the latest compressed tarball: https://www.kernel.org/
 * download a version of your choice in compressed tar format (gz or xz, xz preferred as it is the smaller size): https://mirrors.edge.kernel.org/pub/linux/kernel/v4.x/
 
 Uncompress the kernel:
-* in .gz format: `tar -xzf linux-4.19.96.tar.gz`
-* in .xz format: `tar -xJf linux-4.19.96.tar.xz`
+* in .gz format: `tar -xzf linux-4.19.99.tar.gz`
+* in .xz format: `tar -xJf linux-4.19.99.tar.xz`
 
-Change active directory: `cd linux-4.19.24`<br>
+Change active directory: `cd linux-4.19.99`<br>
 Optionaly, save some disk space by deleting uneeded architectures:
 ```
 cd arch
@@ -113,11 +113,11 @@ Reboot, make sure your netconsole windows are ready and ... good luck:<br>
 
 ## Kernel 4.19.x performance ##
 With a 4.19.x customer kernel, standard 4K block size ext4 file system, Debian 8.11, page size of 16K, network MTU size of 4080, one can expect:
-* Sequential disk reads of 150MB/s to 178MB/s (dd if=tst.dd of=/dev/null bs=4k count=256K) on 4.19.96
-* Sequential disk writes of 154MB/s to 188MB/s (dd if=/dev/zero of=tst.dd bs=1M or 4K) on 4.19.96
+* Sequential disk reads of 150MB/s to 178MB/s (dd if=tst.dd of=/dev/null bs=4k count=256K) on 4.19.99
+* Sequential disk writes of 154MB/s to 188MB/s (dd if=/dev/zero of=tst.dd bs=1M or 4K) on 4.19.99
 * Samba read speed of 111 to 120 MB/s (1GB file read, Windows 10 64-bit) 
 * Samba write speed of up to 75 MB/s (1GB file write, Windows 10 64-bit) on other versions
-* over 20 days of uptime as measured on a My Book Live NAS used in a muti-user production environment (4.19.96)
+* over 180 days of uptime as measured on a My Book Live NAS used in a muti-user production environment (4.19.x)
 
 ## Supportability ##
 Kernel 4.19 series are Long Term Support (LTS) releases and very recent, so a long support live is ahead of us.

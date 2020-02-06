@@ -48,6 +48,7 @@ In the 4.19 folder, you will find the second released patch set for 4.19 which d
 
 Initial testing of 4.20 delivers even better performance than 4.19 !
 Linux kernel 5.0 was a challenge to compile, has weaker performance and did not survive 8 hours of testing.
+Linux kernel 5.3 is looking much better...
 
 Things under consideration and/or under development:
 * DMA hardware support - status: succesful tests completed

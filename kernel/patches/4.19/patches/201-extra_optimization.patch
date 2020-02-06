@@ -1,11 +1,19 @@
---- Makefile	2020-01-22 19:13:27.086027053 +0100
-+++ Makefile	2020-01-22 19:22:15.439303614 +0100
-@@ -662,7 +662,7 @@
- ifdef CONFIG_PROFILE_ALL_BRANCHES
- KBUILD_CFLAGS	+= -O2 $(call cc-disable-warning,maybe-uninitialized,) $(EXTRA_OPTIMIZATION)
+--- a/Makefile
++++ b/Makefile
+@@ -657,12 +657,12 @@
+ KBUILD_CFLAGS	+= $(call cc-disable-warning, address-of-packed-member)
+ 
+ ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
+-KBUILD_CFLAGS	+= -Os $(call cc-disable-warning,maybe-uninitialized,)
++KBUILD_CFLAGS	+= -Os $(call cc-disable-warning,maybe-uninitialized,) $(EXTRA_OPTIMIZATION)
  else
--KBUILD_CFLAGS   += -O2 $(EXTRA_OPTIMIZATION)
+ ifdef CONFIG_PROFILE_ALL_BRANCHES
+-KBUILD_CFLAGS	+= -O2 $(call cc-disable-warning,maybe-uninitialized,)
++KBUILD_CFLAGS	+= -O2 $(call cc-disable-warning,maybe-uninitialized,) $(EXTRA_OPTIMIZATION)
+ else
+-KBUILD_CFLAGS   += -O2
 +KBUILD_CFLAGS   += -O2 -fno-reorder-blocks -fno-tree-ch $(EXTRA_OPTIMIZATION)
  endif
  endif
+ 
 
