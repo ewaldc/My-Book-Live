@@ -1,3 +1,6 @@
+# UPDATE: My development MBL died
+Consequently all development has stopped, unfortunately.
+
 # My-Book-Live (MBL) customization
 Kernel patches and Debian release for Western Digital My Book Live.</br>
 __NOTE__: these customizations will void your warranty and are delivered on best-effort only</br>
