@@ -1,5 +1,5 @@
 # UPDATE: My development MBL died
-Consequently all development has stopped, unfortunately.
+Consequently all development on Kernel 5.4 and DMA driver has stopped, unfortunately.  That said, kernels 4.9 and 4.19 are still full functional and performant.
 
 # My-Book-Live (MBL) customization
 Kernel patches and Debian release for Western Digital My Book Live.</br>
