@@ -1,5 +1,5 @@
 # UPDATE: My development MBL which died is back alive
-During kernel 5.4 Asynchronuous DMA driver work, my MBL died over 18 months ago.  Apperently u-boot and/or u-boot variables were corrupted.  In a nothing-lose-effort, I managed to unsolder a chip and reflash it.
+During kernel 5.4 Asynchronuous DMA driver work, my MBL died over 18 months ago.  Apperently u-boot and/or u-boot variables were corrupted.  In a nothing-to-lose-effort, I managed to unsolder a chip and reflash it.
 
 # My-Book-Live (MBL) customization
 Kernel patches and Debian release for Western Digital My Book Live.</br>
